@@ -1,0 +1,125 @@
+import os from 'os'
+import { config, isCloudConfigured } from '../config'
+import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
+
+let timer: ReturnType<typeof setInterval> | null = null
+let consecutiveFailures = 0
+
+function getLocalIp(): string {
+  // Mirror cloudClient.sendHeartbeat's adapter selection for consistency.
+  const nets = os.networkInterfaces()
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address
+      }
+    }
+  }
+  return '127.0.0.1'
+}
+
+/**
+ * Learn the current leader's LAN address from the cloud (single fetch). Used on
+ * first boot (when leader_host is unknown) and after repeated LAN failures
+ * (covers a manual failover where the leader changed). Reuses the existing
+ * cloud heartbeat path, which returns the authoritative leader info, and caches
+ * it into node_config so subsequent beats stay LAN-only.
+ */
+async function refreshLeaderFromCloud(): Promise<{ host: string; port: number } | null> {
+  if (!isCloudConfigured()) return null
+  try {
+    const { cloudClient } = await import('../services/cloudClient')
+    const response = (await cloudClient.sendHeartbeat(false)) as any
+    if (response && typeof response === 'object') {
+      const { role: resolvedRole, leader } = response
+      // If the cloud says we are the leader now (e.g. a failover made us leader),
+      // hand off to the cluster service so the correct workers start.
+      if (resolvedRole === 'leader') {
+        const { clusterService } = await import('../services/clusterService')
+        clusterService.switchToLeader()
+        return null
+      }
+      if (leader && leader.lan_host) {
+        nodeConfigRepository.set('leader_node_id', leader.node_id)
+        nodeConfigRepository.set('leader_host', leader.lan_host)
+        nodeConfigRepository.set('leader_port', String(leader.lan_port))
+        return { host: leader.lan_host, port: Number(leader.lan_port) || 3001 }
+      }
+    }
+  } catch (err) {
+    console.warn('[LeaderHeartbeat] cloud leader refresh failed:', err instanceof Error ? err.message : err)
+  }
+  return null
+}
+
+export const leaderHeartbeatWorker = {
+  start(): void {
+    this.stop()
+    consecutiveFailures = 0
+
+    const tick = async () => {
+      try {
+        // Only followers heartbeat the leader.
+        if (config.clusterRole !== 'follower') return
+
+        let host = nodeConfigRepository.get('leader_host') || ''
+        let port = parseInt(nodeConfigRepository.get('leader_port') || '3001', 10)
+
+        // First boot / unknown leader → learn it from the cloud once, then cache.
+        if (!host) {
+          const learned = await refreshLeaderFromCloud()
+          if (!learned) return // either we became leader, or cloud unreachable
+          host = learned.host
+          port = learned.port
+        }
+
+        const body = {
+          node_id: config.nodeId,
+          node_label: nodeConfigRepository.get('node_label') || '',
+          station_codes: config.assignedStations,
+          lan_host: getLocalIp(),
+          lan_port: config.localApiPort,
+        }
+
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5000)
+        try {
+          const res = await fetch(`http://${host}:${port}/api/v1/cluster/heartbeat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          })
+          clearTimeout(timeout)
+          if (!res.ok) throw new Error(`leader heartbeat returned ${res.status}`)
+          consecutiveFailures = 0
+        } catch (err) {
+          clearTimeout(timeout)
+          consecutiveFailures += 1
+          console.warn(
+            `[LeaderHeartbeat] beat to ${host}:${port} failed (${consecutiveFailures}): ${
+              err instanceof Error ? err.message : err
+            }`,
+          )
+          // The leader may have changed (manual failover). Re-learn its address
+          // from the cloud once, then keep beating over the LAN.
+          if (consecutiveFailures >= 3) {
+            const learned = await refreshLeaderFromCloud()
+            if (learned) consecutiveFailures = 0
+          }
+        }
+      } catch (err) {
+        console.warn('[LeaderHeartbeat]', err instanceof Error ? err.message : err)
+      }
+    }
+
+    tick()
+    timer = setInterval(tick, config.heartbeatMs)
+    console.log(`[LeaderHeartbeatWorker] Started (${config.heartbeatMs}ms)`)
+  },
+
+  stop(): void {
+    if (timer) clearInterval(timer)
+    timer = null
+  },
+}

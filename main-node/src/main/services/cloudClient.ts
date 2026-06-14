@@ -145,6 +145,28 @@ export const cloudClient = {
     return res.json()
   },
 
+  // Leader → cloud consolidated cluster snapshot. The cloud becomes a
+  // read-only mirror of the leader-owned membership/status.
+  async reportClusterState(snapshot: {
+    leader_id: string
+    nodes: Array<{
+      node_id: string
+      node_label: string
+      cluster_role: string
+      lan_host: string
+      lan_port: number
+      status: string
+      last_seen: string
+    }>
+  }) {
+    const res = await cloudFetch('/api/v1/sync/cluster-state/', {
+      method: 'POST',
+      body: JSON.stringify(snapshot),
+    })
+    if (!res.ok) throw new Error(`reportClusterState failed: ${res.status}`)
+    return res.json() as Promise<{ updated: number }>
+  },
+
   async markOffline() {
     const res = await cloudFetch('/api/v1/sync/node-offline/', {
       method: 'POST',

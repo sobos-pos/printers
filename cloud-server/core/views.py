@@ -16,6 +16,29 @@ from menu.services.menu_service import MenuService
 
 logger = logging.getLogger(__name__)
 
+# A node is considered online if its freshness stamp is within this many seconds.
+# Leader: last_heartbeat_at. Follower: cluster_reported_at (leader snapshot).
+ONLINE_FRESHNESS_SECONDS = 90
+
+
+def is_node_fresh(node, now=None) -> bool:
+    """Derive online status from freshness instead of the stored is_online flag.
+
+    The leader's liveness comes from its own cloud heartbeat (last_heartbeat_at);
+    a follower's liveness comes from the leader's consolidated snapshot
+    (cluster_reported_at). This avoids the 'stuck Online' bug when no sweep runs.
+    """
+    from django.utils import timezone as _tz
+
+    now = now or _tz.now()
+    stamp = node.last_heartbeat_at if node.cluster_role == 'leader' else node.cluster_reported_at
+    # Fall back to last_heartbeat_at for legacy rows that never received a snapshot.
+    if stamp is None:
+        stamp = node.last_heartbeat_at
+    if stamp is None:
+        return False
+    return (now - stamp).total_seconds() <= ONLINE_FRESHNESS_SECONDS
+
 
 def get_auth(request):
     """Returns (node, error_response). node is the LocationNode if authed."""
@@ -161,6 +184,71 @@ class SyncHeartbeatView(View):
 
 
 @method_decorator(csrf_exempt, name='dispatch')
+class SyncClusterStateView(View):
+    """POST /api/v1/sync/cluster-state/ — the leader pushes ONE consolidated
+    snapshot of cluster membership/status. The cloud becomes a read-only mirror.
+
+    Authenticated via the leader's Api-Key; the caller must be the current
+    active lease holder (rejects a non-leader trying to report)."""
+
+    def post(self, request):
+        node, err = get_auth(request)
+        if err:
+            return err
+
+        try:
+            data = json.loads(request.body)
+        except Exception:
+            return JsonResponse({'error': 'Invalid request body'}, status=400)
+
+        leader_id = data.get('leader_id', '')
+        nodes = data.get('nodes', [])
+
+        # Only the active lease holder may report cluster state.
+        if not ActiveLeaseService.is_holder(node.location, leader_id):
+            return JsonResponse(
+                {
+                    'error': {
+                        'code': 'NOT_ACTIVE_HOLDER',
+                        'message': 'Only the active lease holder may report cluster state',
+                        'details': ActiveLeaseService.status(node.location),
+                    }
+                },
+                status=409,
+            )
+
+        from django.utils import timezone
+        from core.models import LocationNode
+
+        now = timezone.now()
+        updated = 0
+        for entry in nodes:
+            node_id = (entry.get('node_id') or '').strip()
+            if not node_id:
+                continue
+            n, created = LocationNode.objects.get_or_create(
+                location=node.location,
+                node_id=node_id,
+                defaults={'cluster_role': entry.get('cluster_role', 'follower')},
+            )
+            n.node_label = entry.get('node_label', n.node_label)
+            n.cluster_role = entry.get('cluster_role', n.cluster_role)
+            n.lan_host = entry.get('lan_host', n.lan_host)
+            n.lan_port = entry.get('lan_port', n.lan_port)
+            n.cluster_reported_at = now
+            # Keep the stored flag for backward-compat; the displayed status is
+            # always derived from freshness on read.
+            n.is_online = str(entry.get('status', '')).upper() == 'ONLINE'
+            n.save(update_fields=[
+                'node_label', 'cluster_role', 'lan_host', 'lan_port',
+                'cluster_reported_at', 'is_online', 'updated_at',
+            ])
+            updated += 1
+
+        return JsonResponse({'updated': updated})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
 class SyncMenuView(View):
     def get(self, request):
         node, err = get_auth(request)
@@ -280,6 +368,28 @@ def get_session_user(request):
     return None
 
 
+def serialize_user_context(user) -> dict:
+    """Shared {user, restaurants[].locations[]} payload for login + /auth/me/."""
+    restaurant = user.restaurant
+    restaurants = []
+    if restaurant:
+        restaurants.append({
+            'id': str(restaurant.id),
+            'name': restaurant.name,
+            'locations': [
+                {'id': str(loc.id), 'name': loc.name}
+                for loc in restaurant.locations.all()
+            ],
+        })
+    return {
+        'user': {
+            'name': user.get_full_name() or user.username,
+            'role': user.role,
+        },
+        'restaurants': restaurants,
+    }
+
+
 @method_decorator(csrf_exempt, name='dispatch')
 class AuthLoginView(View):
     def post(self, request):
@@ -292,7 +402,7 @@ class AuthLoginView(View):
 
         from django.contrib.auth import authenticate, login
         from core.models import StaffUser
-        
+
         user = StaffUser.objects.filter(email=email).first()
         if not user:
             user = StaffUser.objects.filter(username=email).first()
@@ -310,26 +420,25 @@ class AuthLoginView(View):
             request.session.create()
             session_token = request.session.session_key
 
-        restaurant = authenticated_user.restaurant
-        restaurants = []
-        if restaurant:
-            restaurants.append({
-                'id': str(restaurant.id),
-                'name': restaurant.name,
-                'locations': [
-                    {'id': str(loc.id), 'name': loc.name}
-                    for loc in restaurant.locations.all()
-                ]
-            })
-
         return JsonResponse({
             'session_token': f'tok_{session_token}',
-            'user': {
-                'name': authenticated_user.get_full_name() or authenticated_user.username,
-                'role': authenticated_user.role,
-            },
-            'restaurants': restaurants,
+            **serialize_user_context(authenticated_user),
         })
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AuthMeView(View):
+    """GET /api/v1/auth/me/ — re-validate a stored token on app relaunch.
+
+    Returns the same {user, restaurants} context as login (without a new token),
+    or 401 if the Bearer token is missing/invalid.
+    """
+
+    def get(self, request):
+        user = get_session_user(request)
+        if user is None:
+            return JsonResponse({'error': 'Invalid or expired token'}, status=401)
+        return JsonResponse(serialize_user_context(user))
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -444,16 +553,22 @@ class SyncNodesView(View):
         from django.utils import timezone
         from core.models import LocationNode
 
+        now = timezone.now()
         nodes_list = []
         for n in LocationNode.objects.filter(location=location):
+            # Follower freshness comes from the leader snapshot; leader freshness
+            # from its own cloud heartbeat.
+            stamp = n.last_heartbeat_at if n.cluster_role == 'leader' else n.cluster_reported_at
+            if stamp is None:
+                stamp = n.last_heartbeat_at
             last_seen = None
-            if n.last_heartbeat_at:
-                last_seen = int((timezone.now() - n.last_heartbeat_at).total_seconds())
+            if stamp:
+                last_seen = int((now - stamp).total_seconds())
             nodes_list.append({
                 'node_id': n.node_id,
                 'node_name': n.node_label,
                 'cluster_role': n.cluster_role,
-                'is_online': n.is_online,
+                'is_online': is_node_fresh(n, now),
                 'lan_host': n.lan_host,
                 'lan_port': n.lan_port,
                 'last_seen_seconds': last_seen,

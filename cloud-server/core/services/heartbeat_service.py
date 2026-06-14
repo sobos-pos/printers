@@ -4,6 +4,21 @@ from django.utils import timezone
 
 from core.models import LocationNode
 
+# A node is online if its freshness stamp is within this many seconds.
+# Leader: last_heartbeat_at. Follower: cluster_reported_at (leader snapshot).
+ONLINE_FRESHNESS_SECONDS = 90
+
+
+def _is_fresh(node, now=None) -> bool:
+    """Derive online status from freshness instead of the stored is_online flag."""
+    now = now or timezone.now()
+    stamp = node.last_heartbeat_at if node.cluster_role == 'leader' else node.cluster_reported_at
+    if stamp is None:
+        stamp = node.last_heartbeat_at
+    if stamp is None:
+        return False
+    return (now - stamp).total_seconds() <= ONLINE_FRESHNESS_SECONDS
+
 
 class HeartbeatService:
 
@@ -78,7 +93,7 @@ class HeartbeatService:
                     'node_id': leader_node.node_id,
                     'lan_host': leader_node.lan_host,
                     'lan_port': leader_node.lan_port,
-                    'is_online': leader_node.is_online,
+                    'is_online': _is_fresh(leader_node),
                 }
             except LocationNode.DoesNotExist:
                 leader_info = {
@@ -97,7 +112,7 @@ class HeartbeatService:
                 'cluster_role': p.cluster_role,
                 'lan_host': p.lan_host,
                 'lan_port': p.lan_port,
-                'is_online': p.is_online,
+                'is_online': _is_fresh(p),
             })
 
         return {

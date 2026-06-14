@@ -6,6 +6,7 @@ from core.models import BaseModel
 class Order(BaseModel):
     class OrderSource(models.TextChoices):
         STAFF_POS = 'Staff_POS', 'Staff POS'
+        WAITER_APP = 'Waiter_App', 'Waiter App'
         USER_APP_QR = 'User_App_QR', 'User App QR'
         ONDC = 'ONDC', 'ONDC'
         WEB_DIRECT = 'Web_Direct', 'Web Direct'
@@ -43,6 +44,13 @@ class Order(BaseModel):
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     customer_note = models.TextField(blank=True)
     idempotency_key = models.CharField(max_length=64, blank=True, db_index=True)
+    created_by = models.ForeignKey(
+        'core.StaffUser',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='orders_created',
+    )
 
     class Meta:
         indexes = [

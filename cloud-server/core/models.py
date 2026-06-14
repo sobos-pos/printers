@@ -47,7 +47,13 @@ class StaffUser(AbstractUser):
     )
     role = models.CharField(
         max_length=20,
-        choices=[('owner', 'Owner'), ('manager', 'Manager'), ('staff', 'Staff')],
+        choices=[
+            ('owner', 'Owner'),
+            ('manager', 'Manager'),
+            ('staff', 'Staff'),
+            ('waiter', 'Waiter'),
+            ('kiosk', 'Kiosk'),
+        ],
         default='staff'
     )
 
@@ -71,6 +77,9 @@ class LocationNode(BaseModel):
     lan_port = models.IntegerField(default=3001)
     api_key_hash = models.CharField(max_length=128)
     last_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    # Freshness stamp written by the leader's consolidated cluster snapshot
+    # (SyncClusterStateView). Used to derive follower online status on read.
+    cluster_reported_at = models.DateTimeField(null=True, blank=True)
     is_online = models.BooleanField(default=False)
 
     class Meta:

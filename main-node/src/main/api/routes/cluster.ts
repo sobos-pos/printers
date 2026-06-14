@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../../config'
 import { nodeConfigRepository } from '../../repositories/nodeConfigRepository'
+import { clusterNodeRepository } from '../../repositories/clusterNodeRepository'
 import { getDb } from '../../db/connection'
 
 export function registerClusterRoutes(app: FastifyInstance): void {
@@ -21,6 +22,30 @@ export function registerClusterRoutes(app: FastifyInstance): void {
         status: leaderStatus
       } : null
     }
+  })
+
+  // Follower → leader liveness signal. The follower POSTs this every
+  // heartbeatMs; the leader records it into cluster_nodes as ONLINE with a
+  // fresh last_health_check. runFollowerHealthChecks stays as a cross-check.
+  app.post('/api/v1/cluster/heartbeat', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { node_id, node_label, station_codes, lan_host, lan_port } = (request.body || {}) as any
+
+    if (!node_id || !lan_host) {
+      reply.status(400).send({ error: 'Missing node_id or lan_host' })
+      return
+    }
+
+    clusterNodeRepository.upsert({
+      node_id,
+      node_label: node_label ?? '',
+      station_codes: JSON.stringify(station_codes ?? []),
+      host: lan_host,
+      port: typeof lan_port === 'number' ? lan_port : parseInt(lan_port || '3001', 10),
+      status: 'ONLINE',
+      last_health_check: new Date().toISOString(),
+    })
+
+    return { status: 'ok' }
   })
 
   app.post('/api/v1/cluster/print-job', async (request: FastifyRequest, reply: FastifyReply) => {

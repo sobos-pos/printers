@@ -5,6 +5,7 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
+from core.views import get_session_user
 from orders.models import Order
 from orders.serializers import serialize_order
 from orders.services.kot_service import KOTService
@@ -16,11 +17,16 @@ class OrderCreateView(View):
     def post(self, request):
         try:
             data = json.loads(request.body)
+            # Soft auth: if a valid staff token is present, attribute the order to
+            # that user. Anonymous orders (QR customer flow) remain allowed.
+            staff_user = get_session_user(request)
             order = OrderService.create_order(
                 table_uuid=data['table_uuid'],
                 source=data.get('source', Order.OrderSource.USER_APP_QR),
                 items=data.get('items', []),
                 idempotency_key=request.headers.get('Idempotency-Key', ''),
+                customer_note=data.get('customer_note', ''),
+                created_by=staff_user,
             )
             order = OrderService.get_order(order.id)
             return JsonResponse(serialize_order(order), status=201)

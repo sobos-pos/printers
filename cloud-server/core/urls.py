@@ -3,6 +3,7 @@ from django.urls import path
 from core.views import (
     SyncActiveStatusView,
     SyncClaimActiveView,
+    SyncClusterStateView,
     SyncHeartbeatView,
     SyncMenuView,
     SyncNodeConfigView,
@@ -22,6 +23,7 @@ urlpatterns = [
     path('orders/<uuid:order_uuid>/status/', SyncOrderStatusView.as_view()),
     path('orders/bulk/', SyncOrdersBulkView.as_view()),
     path('heartbeat/', SyncHeartbeatView.as_view()),
+    path('cluster-state/', SyncClusterStateView.as_view()),
     path('menu/', SyncMenuView.as_view()),
     path('active-status/', SyncActiveStatusView.as_view()),
     path('claim-active/', SyncClaimActiveView.as_view()),

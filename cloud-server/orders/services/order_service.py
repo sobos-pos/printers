@@ -20,6 +20,8 @@ class OrderService:
         items: list,
         idempotency_key: str = '',
         order_id=None,
+        customer_note: str = '',
+        created_by=None,
     ) -> Order:
         """
         Validate, create Order + items, enqueue ORDER_CREATED in SyncOutbox.
@@ -39,6 +41,8 @@ class OrderService:
             'source': source,
             'status': Order.Status.PENDING,
             'total': Decimal('0'),
+            'customer_note': customer_note or '',
+            'created_by': created_by,
             'idempotency_key': idempotency_key or '',
         }
         if order_id:
@@ -118,7 +122,7 @@ class OrderService:
     @staticmethod
     def get_order(order_uuid: str) -> Order:
         return (
-            Order.objects.select_related('location', 'table')
+            Order.objects.select_related('location', 'table', 'created_by')
             .prefetch_related(
                 'items__menu_item__station',
                 'items__variant',
@@ -161,6 +165,7 @@ class OrderService:
             'status': order.status,
             'total': str(order.total),
             'customer_note': order.customer_note,
+            'created_by': str(order.created_by.id) if order.created_by else None,
             'created_at': order.created_at.isoformat(),
             'items': items,
         }
