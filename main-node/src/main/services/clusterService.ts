@@ -25,7 +25,7 @@ export const clusterService = {
   },
 
   async runFollowerHealthChecks(): Promise<void> {
-    const followers = clusterNodeRepository.listAll()
+    const followers = clusterNodeRepository.listAll().filter((n) => n.node_id !== config.nodeId)
     for (const node of followers) {
       const url = `http://${node.host}:${node.port}/health/`
       const controller = new AbortController()
@@ -57,6 +57,11 @@ export const clusterService = {
   },
 
   async forwardPrintJob(nodeId: string, payload: any): Promise<boolean> {
+    if (nodeId === config.nodeId) {
+      console.warn(`[Cluster] Refusing to forward print job to self (${nodeId})`)
+      return false
+    }
+
     const node = clusterNodeRepository.get(nodeId)
     if (!node || node.status !== 'ONLINE') {
       console.warn(`[Cluster] Cannot forward print job to ${nodeId} — node is not registered or offline`)

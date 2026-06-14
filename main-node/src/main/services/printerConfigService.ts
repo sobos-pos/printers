@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { config } from '../config'
+import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
 import { printerRepository } from '../repositories/printerRepository'
 import { cloudClient } from './cloudClient'
 import { listOsPrintersAsync } from './printerDiscovery'
@@ -68,19 +69,21 @@ export const printerConfigService = {
   async saveAssignments(
     entries: Array<{ station_code: string; print_type: string; printer_name: string }>,
   ): Promise<number> {
-    const driver = config.printerDriver === 'escpos' ? 'escpos' : 'simulated'
     let saved = 0
+    let firstPrinterName = ''
 
     for (const entry of entries) {
       const printerName = entry.printer_name.trim()
       if (!printerName) continue
+
+      if (!firstPrinterName) firstPrinterName = printerName
 
       const id = printerIdForName(printerName)
       printerRepository.upsertPrinter({
         id,
         name: printerName,
         connection: printerName,
-        driver,
+        driver: 'escpos',
         enabled: 1,
       })
       printerRepository.upsertRoute({
@@ -90,6 +93,11 @@ export const printerConfigService = {
         fallback_printer_id: null,
       })
       saved++
+    }
+
+    if (saved > 0) {
+      nodeConfigRepository.set('printer_driver', 'escpos')
+      nodeConfigRepository.set('printer_name', firstPrinterName)
     }
 
     await nodeConfigService.backupConfig()

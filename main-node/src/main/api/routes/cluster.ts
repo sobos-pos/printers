@@ -33,11 +33,11 @@ export function registerClusterRoutes(app: FastifyInstance): void {
 
     const { printService } = await import('../../services/printService')
     const { printerRepository } = await import('../../repositories/printerRepository')
-    const { getPrinterDriver } = await import('../../services/printerDriver')
+    const { resolvePrinterDriver } = await import('../../services/printerDriver')
 
     const printerId = printService.resolvePrinterId(station, job_type)
     const printer = printerId ? printerRepository.getPrinter(printerId) : null
-    const driver = getPrinterDriver(printer?.driver ?? config.printerDriver)
+    const driver = resolvePrinterDriver(printer, config.printerDriver)
 
     // Check if local printer is online before queueing
     const isAvailable = await driver.isAvailable({ printer, paperWidth: config.paperWidth })

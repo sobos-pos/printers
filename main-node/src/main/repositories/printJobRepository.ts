@@ -4,14 +4,23 @@ import type { PrintJobRow } from '../types'
 
 export const printJobRepository = {
   enqueue(job: {
+    id?: string
     order_id: string
     station: string
     job_type: string
     printer_id: string | null
     payload: string
   }): string {
-    const id = uuidv4()
+    const id = job.id ?? uuidv4()
     const now = nowIso()
+    const existing = getDb()
+      .prepare('SELECT id, status FROM print_jobs WHERE id = ?')
+      .get(id) as { id: string; status: string } | undefined
+    if (existing) {
+      if (existing.status === 'PRINTED' || existing.status === 'FAILED') return id
+      return id
+    }
+
     getDb()
       .prepare(
         `INSERT INTO print_jobs (id, order_id, station, job_type, printer_id, payload, status, attempt_count, created_at, updated_at)

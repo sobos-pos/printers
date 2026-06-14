@@ -12,7 +12,7 @@ import { nodeConfigRepository } from './repositories/nodeConfigRepository'
 import { nodeConfigService } from './services/nodeConfigService'
 import { menuSyncService } from './services/menuSyncService'
 import { workerManager } from './workers/workerManager'
-import { seedLocalPrintersIfEmpty, configurePrinterFromEnv } from './bootstrap/seedPrinters'
+import { seedLocalPrintersIfEmpty, configurePrinterFromEnv, upgradeMisconfiguredPrinterDrivers } from './bootstrap/seedPrinters'
 import { orderRepository } from './repositories/orderRepository'
 import { printJobRepository } from './repositories/printJobRepository'
 import { syncRepository } from './repositories/syncRepository'
@@ -35,6 +35,7 @@ async function bootstrapAsync(): Promise<void> {
   if (isCloudConfigured()) {
     // Restore this node's own printer/route config blob from Cloud.
     await nodeConfigService.restoreConfig().catch(() => false)
+    upgradeMisconfiguredPrinterDrivers()
 
     if (config.clusterRole === 'leader') {
       await menuSyncService.bootstrapMenuFromCloud().catch((err) => {
@@ -50,6 +51,7 @@ async function bootstrapAsync(): Promise<void> {
         .fetchNodesByApiKey()
         .then(({ nodes }) => {
           for (const n of nodes) {
+            if (n.node_id === config.nodeId) continue
             clusterNodeRepository.upsert({
               node_id: n.node_id,
               node_label: n.node_name,

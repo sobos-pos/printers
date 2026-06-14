@@ -3,7 +3,7 @@ import { printJobRepository } from '../repositories/printJobRepository'
 import { printerRepository } from '../repositories/printerRepository'
 import { printRouteRepository } from '../repositories/printRouteRepository'
 import type { KotPrintPayload, KotSegment, PaperWidth } from '../types'
-import { getPrinterDriver } from './printerDriver'
+import { resolvePrinterDriver } from './printerDriver'
 
 export function backoffDelayMs(attemptCount: number): number {
   const schedule = [5000, 15000, 30000, 60000]
@@ -79,7 +79,7 @@ export const printService = {
           job.job_type,
         )
 
-        if (route && route.assigned_node_id) {
+        if (route?.assigned_node_id && route.assigned_node_id !== config.nodeId) {
           const { clusterNodeRepository } = await import('../repositories/clusterNodeRepository')
           const node = clusterNodeRepository.get(route.assigned_node_id)
 
@@ -118,7 +118,7 @@ export const printService = {
       // Local printing fallback or direct local printing
       const printerId = this.resolvePrinterId(job.station, job.job_type)
       const printer = printerId ? printerRepository.getPrinter(printerId) : null
-      const driver = getPrinterDriver(printer?.driver ?? config.printerDriver)
+      const driver = resolvePrinterDriver(printer, config.printerDriver)
       const payload = JSON.parse(job.payload) as KotPrintPayload
       const ctx = { printer, paperWidth }
 

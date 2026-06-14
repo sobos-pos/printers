@@ -4,9 +4,21 @@ import { printerRepository } from '../repositories/printerRepository'
 
 const USB_PRINTER_ID = 'prn-usb-1'
 
+export function upgradeMisconfiguredPrinterDrivers(): void {
+  for (const printer of printerRepository.getAllPrinters()) {
+    if (printer.connection !== 'simulated' && printer.driver !== 'escpos') {
+      printerRepository.upsertPrinter({ ...printer, driver: 'escpos' })
+      console.log(`[Boot] Upgraded printer "${printer.name}" to escpos driver`)
+    }
+  }
+}
+
 export function seedLocalPrintersIfEmpty(): void {
   const existing = printerRepository.getAllPrinters()
-  if (existing.length) return
+  if (existing.length) {
+    upgradeMisconfiguredPrinterDrivers()
+    return
+  }
 
   dbSeedSimulated()
   console.log('[Boot] Seeded simulated printer + KITCHEN/BAR routes')

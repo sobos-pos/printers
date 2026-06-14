@@ -15,3 +15,13 @@ export interface PrinterDriver {
 export function getPrinterDriver(driverName: string): PrinterDriver {
   return driverName === 'escpos' ? escposPrinter : simulatedPrinter
 }
+
+/** Pick escpos when the printer row points at a real OS/TCP device, even if driver was saved wrong. */
+export function resolvePrinterDriver(
+  printer: PrinterRow | null,
+  fallbackDriver = 'simulated',
+): PrinterDriver {
+  if (printer?.driver === 'escpos') return escposPrinter
+  if (printer?.connection && printer.connection !== 'simulated') return escposPrinter
+  return getPrinterDriver(printer?.driver ?? fallbackDriver)
+}
