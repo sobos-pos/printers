@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('soboss', {
   getStatus: () => ipcRenderer.invoke('get-status'),
   becomeActive: () => ipcRenderer.invoke('become-active'),
   getPrinters: () => ipcRenderer.invoke('get-printers'),
+  getPrinterAssignments: () => ipcRenderer.invoke('get-printer-assignments'),
+  savePrinterAssignments: (data: any) => ipcRenderer.invoke('save-printer-assignments', data),
   listOsPrinters: () => ipcRenderer.invoke('list-os-printers'),
   testPrint: (printerName?: string) => ipcRenderer.invoke('test-print', printerName),
   readKotLog: () => ipcRenderer.invoke('read-kot-log'),
@@ -28,6 +30,20 @@ declare global {
       getStatus: () => Promise<Record<string, unknown>>
       becomeActive: () => Promise<{ granted: boolean; reason?: string }>
       getPrinters: () => Promise<{ printers: unknown[]; routes: unknown[] }>
+      getPrinterAssignments: () => Promise<{
+        assignments: Array<{
+          station_code: string
+          station_name: string
+          print_type: string
+          scope: 'assigned' | 'leader_fallback'
+          printer_id: string | null
+          printer_name: string | null
+        }>
+        os_printers: Array<{ name: string; isDefault: boolean }>
+      }>
+      savePrinterAssignments: (data: {
+        assignments: Array<{ station_code: string; print_type: string; printer_name: string }>
+      }) => Promise<{ saved: number }>
       listOsPrinters: () => Promise<Array<{ name: string; isDefault: boolean }>>
       testPrint: (printerName?: string) => Promise<{ ok: boolean; printer: string }>
       readKotLog: () => Promise<string>

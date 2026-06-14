@@ -44,6 +44,7 @@ document.querySelectorAll('nav button').forEach((btn) => {
     showPanel(panel)
     if (panel === 'nodes') refreshNodeManagement()
     if (panel === 'cluster') refreshClusterStatus()
+    if (panel === 'printers') refreshPrinterPanel()
   })
 })
 
@@ -325,9 +326,33 @@ async function refreshKotLog(): Promise<void> {
 }
 
 // ─── Printers ────────────────────────────────────────────────────────
+let cachedOsPrinters: Array<{ name: string; isDefault: boolean }> = []
+
+function escapeHtml(s: string): string {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string)
+  )
+}
+
+function buildPrinterOptions(selectedName: string | null, osPrinters: Array<{ name: string; isDefault: boolean }>): string {
+  const names = new Set<string>()
+  for (const p of osPrinters) names.add(p.name)
+  if (selectedName) names.add(selectedName)
+
+  const sorted = [...names].sort((a, b) => a.localeCompare(b))
+  const options = ['<option value="">— Select printer —</option>']
+  for (const name of sorted) {
+    const sel = name === selectedName ? ' selected' : ''
+    const safeValue = name.replace(/"/g, '&quot;')
+    options.push(`<option value="${safeValue}"${sel}>${escapeHtml(name)}</option>`)
+  }
+  return options.join('')
+}
+
 async function refreshOsPrinters(): Promise<void> {
   try {
     const list = await api().listOsPrinters()
+    cachedOsPrinters = list
     const el = document.getElementById('os-printers-list')!
     if (!list.length) {
       el.textContent = 'No OS printers found.'
@@ -339,10 +364,85 @@ async function refreshOsPrinters(): Promise<void> {
   }
 }
 
-document.getElementById('refresh-os-printers-btn')!.addEventListener('click', () => {
-  refreshOsPrinters()
-  refreshPrinters()
+async function refreshPrinterPanel(): Promise<void> {
+  const tbody = document.getElementById('printer-assignments-body')!
+  try {
+    const data = await api().getPrinters() as {
+      assignments?: Array<{
+        station_code: string
+        station_name: string
+        print_type: string
+        scope: 'assigned' | 'leader_fallback'
+        printer_name: string | null
+      }>
+      os_printers?: Array<{ name: string; isDefault: boolean }>
+    }
+    const assignments = data.assignments ?? []
+    const osPrinters = data.os_printers?.length ? data.os_printers : await api().listOsPrinters()
+    cachedOsPrinters = osPrinters
+
+    if (assignments.length === 0) {
+      tbody.innerHTML =
+        '<tr><td colspan="4" style="color:var(--text-muted)">No stations are routed to this node yet. Assign stations in Node Management (Leader) first.</td></tr>'
+      return
+    }
+
+    tbody.innerHTML = assignments.map((a) => {
+      const routing = a.scope === 'leader_fallback'
+        ? '<span style="color:var(--warning)">Leader fallback</span>'
+        : '<span style="color:var(--success)">Assigned to this node</span>'
+      return `
+        <tr data-station="${escapeHtml(a.station_code)}" data-type="${escapeHtml(a.print_type)}">
+          <td>${escapeHtml(a.station_name || a.station_code)}</td>
+          <td>${escapeHtml(a.print_type)}</td>
+          <td>${routing}</td>
+          <td>
+            <select class="printer-route-select" data-station="${escapeHtml(a.station_code)}" data-type="${escapeHtml(a.print_type)}">
+              ${buildPrinterOptions(a.printer_name, osPrinters)}
+            </select>
+          </td>
+        </tr>
+      `
+    }).join('')
+  } catch (err: any) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--error)">${escapeHtml(err.message || String(err))}</td></tr>`
+  }
+}
+
+document.getElementById('refresh-os-printers-btn')!.addEventListener('click', async () => {
+  await refreshOsPrinters()
+  await refreshPrinterPanel()
   showToast('Printers list refreshed.', 'success')
+})
+
+document.getElementById('save-printer-assignments-btn')!.addEventListener('click', async () => {
+  const statusEl = document.getElementById('save-printer-assignments-status')!
+  const btn = document.getElementById('save-printer-assignments-btn') as HTMLButtonElement
+  btn.disabled = true
+  btn.textContent = 'Saving…'
+  statusEl.textContent = ''
+
+  try {
+    const assignments: Array<{ station_code: string; print_type: string; printer_name: string }> = []
+    document.querySelectorAll<HTMLSelectElement>('.printer-route-select').forEach((sel) => {
+      assignments.push({
+        station_code: sel.dataset.station!,
+        print_type: sel.dataset.type!,
+        printer_name: sel.value,
+      })
+    })
+
+    const result = await api().savePrintRoutes({ printer_assignments: assignments }) as { saved: number }
+    statusEl.textContent = `Saved ${result.saved} mapping(s).`
+    showToast(`Printer mapping saved (${result.saved} routes).`, 'success')
+    await refreshPrinterPanel()
+  } catch (err: any) {
+    statusEl.textContent = 'Save failed.'
+    showToast(`Save failed: ${err.message}`, 'error')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Save Mapping'
+  }
 })
 
 document.getElementById('test-print-btn')!.addEventListener('click', async () => {
@@ -359,16 +459,6 @@ document.getElementById('test-print-btn')!.addEventListener('click', async () =>
     btn.textContent = 'Test Print Page'
   }
 })
-
-async function refreshPrinters(): Promise<void> {
-  try {
-    const { printers } = await api().getPrinters()
-    const tbody = document.querySelector('#printers-table tbody')!
-    tbody.innerHTML = (printers as Array<Record<string, unknown>>)
-      .map((p) => `<tr><td>${p.id}</td><td>${p.name}</td><td>${p.driver}</td><td>${p.connection}</td></tr>`)
-      .join('')
-  } catch { /* status panel shows the error */ }
-}
 
 // ─── Force promote ────────────────────────────────────────────────────
 document.getElementById('become-active-btn')!.addEventListener('click', async () => {
@@ -392,12 +482,6 @@ document.getElementById('become-active-btn')!.addEventListener('click', async ()
 // nodes are visible and selectable for routing before they have ever connected.
 let cachedNodes: any[] = []
 let cachedRoutes: any[] = []
-
-function escapeHtml(s: string): string {
-  return String(s).replace(/[&<>"]/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string)
-  )
-}
 
 async function refreshNodeManagement(): Promise<void> {
   try {
@@ -576,8 +660,8 @@ try {
 // ─── Bootstrap ───────────────────────────────────────────────────────
 refreshStatus()
 refreshKotLog()
-refreshPrinters()
 refreshOsPrinters()
+refreshPrinterPanel()
 setInterval(refreshStatus, 5000)
 setInterval(refreshKotLog, 3000)
 

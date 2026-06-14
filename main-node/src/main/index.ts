@@ -221,7 +221,15 @@ function registerIpc(): void {
     return cloudClient.fetchPrintRoutes()
   })
 
-  ipcMain.handle('save-print-routes', async (_e, { routes }) => {
+  ipcMain.handle('save-print-routes', async (_e, payload) => {
+    const { routes, printer_assignments: printerAssignments } = payload ?? {}
+
+    if (printerAssignments) {
+      const { printerConfigService } = await import('./services/printerConfigService')
+      const saved = await printerConfigService.saveAssignments(printerAssignments)
+      return { saved }
+    }
+
     const { cloudClient } = await import('./services/cloudClient')
     const result = await cloudClient.savePrintRoutes(routes)
     // Cache locally for print routing resolution
@@ -271,10 +279,31 @@ function registerIpc(): void {
     return { ok: true }
   })
 
-  ipcMain.handle('get-printers', () => ({
-    printers: printerRepository.getAllPrinters(),
-    routes: printerRepository.getAllRoutes(),
-  }))
+  ipcMain.handle('get-printers', async () => {
+    const base = {
+      printers: printerRepository.getAllPrinters(),
+      routes: printerRepository.getAllRoutes(),
+    }
+    try {
+      const { printerConfigService } = await import('./services/printerConfigService')
+      const { assignments, os_printers } = await printerConfigService.getAssignments()
+      return { ...base, assignments, os_printers }
+    } catch (err) {
+      console.warn('[IPC] get-printers assignments failed:', err)
+      return { ...base, assignments: [], os_printers: [] }
+    }
+  })
+
+  ipcMain.handle('get-printer-assignments', async () => {
+    const { printerConfigService } = await import('./services/printerConfigService')
+    return printerConfigService.getAssignments()
+  })
+
+  ipcMain.handle('save-printer-assignments', async (_e, { assignments }) => {
+    const { printerConfigService } = await import('./services/printerConfigService')
+    const saved = await printerConfigService.saveAssignments(assignments ?? [])
+    return { saved }
+  })
 
   ipcMain.handle('list-os-printers', async () => {
     const { listOsPrintersAsync } = await import('./services/printerDiscovery')

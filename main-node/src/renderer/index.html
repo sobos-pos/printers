@@ -222,15 +222,38 @@
     </div>
 
     <div id="panel-printers" class="panel">
-      <p style="margin-bottom:12px;color:var(--text-muted);font-size:13px">
-        Manage local receipt and kitchen printing.
-      </p>
-      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-        <button class="btn btn-secondary" id="refresh-os-printers-btn">Refresh Printers</button>
-        <button class="btn" id="test-print-btn">Test Print Page</button>
+      <div class="section">
+        <h2>Station Printer Mapping</h2>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+          Each row is a station and print type routed to this node. Choose the local OS printer that should handle it.
+        </p>
+        <table id="printer-assignments-table">
+          <thead>
+            <tr>
+              <th>Station</th>
+              <th>Type</th>
+              <th>Routing</th>
+              <th>Printer</th>
+            </tr>
+          </thead>
+          <tbody id="printer-assignments-body">
+            <tr><td colspan="4" style="color:var(--text-muted)">Loading assignments…</td></tr>
+          </tbody>
+        </table>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:16px;flex-wrap:wrap">
+          <button class="btn" id="save-printer-assignments-btn">Save Mapping</button>
+          <span id="save-printer-assignments-status" style="font-size:13px;color:var(--text-muted)"></span>
+        </div>
       </div>
-      <pre id="os-printers-list" style="margin-bottom:16px;max-height:160px">Loading OS printers…</pre>
-      <table id="printers-table"><thead><tr><th>ID</th><th>Name</th><th>Driver</th><th>Connection</th></tr></thead><tbody></tbody></table>
+
+      <div class="section">
+        <h2>OS Printers &amp; Test</h2>
+        <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+          <button class="btn btn-secondary" id="refresh-os-printers-btn">Refresh Printers</button>
+          <button class="btn" id="test-print-btn">Test Print Page</button>
+        </div>
+        <pre id="os-printers-list" style="margin-bottom:0;max-height:160px">Loading OS printers…</pre>
+      </div>
     </div>
 
     <!-- NODE MANAGEMENT (Leader only) -->
