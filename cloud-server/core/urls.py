@@ -6,12 +6,14 @@ from core.views import (
     SyncHeartbeatView,
     SyncMenuView,
     SyncNodeConfigView,
+    SyncNodeOfflineView,
     SyncOrderStatusView,
     SyncOrdersAckView,
     SyncOrdersBulkView,
     SyncOrdersPollView,
-    ApprovePromotionView,
     SyncNodesView,
+    SyncNodesCreateView,
+    SyncPrintRoutesView,
 )
 
 urlpatterns = [
@@ -24,6 +26,8 @@ urlpatterns = [
     path('active-status/', SyncActiveStatusView.as_view()),
     path('claim-active/', SyncClaimActiveView.as_view()),
     path('node-config/', SyncNodeConfigView.as_view()),
-    path('approve-promotion/', ApprovePromotionView.as_view()),
+    path('node-offline/', SyncNodeOfflineView.as_view()),
     path('nodes/', SyncNodesView.as_view()),
+    path('nodes/create/', SyncNodesCreateView.as_view()),
+    path('print-routes/', SyncPrintRoutesView.as_view()),
 ]

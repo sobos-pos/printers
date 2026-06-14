@@ -127,12 +127,6 @@ export const cloudClient = {
 
     const { nodeConfigRepository } = await import('../repositories/nodeConfigRepository')
     const nodeLabel = nodeConfigRepository.get('node_label') || ''
-    const priorityStr = nodeConfigRepository.get('election_priority') || '10'
-    const stationCodesStr = nodeConfigRepository.get('assigned_stations') || '["KITCHEN"]'
-    let stationCodes = ['KITCHEN']
-    try {
-      stationCodes = JSON.parse(stationCodesStr)
-    } catch {}
 
     const res = await cloudFetch('/api/v1/sync/heartbeat/', {
       method: 'POST',
@@ -143,13 +137,20 @@ export const cloudClient = {
         is_active: isActive,
         cluster_role: config.clusterRole,
         node_label: nodeLabel,
-        station_codes: stationCodes,
-        election_priority: parseInt(priorityStr, 10),
         lan_host: getLocalIp(),
         lan_port: config.localApiPort,
       }),
     })
     if (!res.ok) throw new Error(`heartbeat failed: ${res.status}`)
+    return res.json()
+  },
+
+  async markOffline() {
+    const res = await cloudFetch('/api/v1/sync/node-offline/', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    if (!res.ok) throw new Error(`markOffline failed: ${res.status}`)
     return res.json()
   },
 
@@ -198,5 +199,120 @@ export const cloudClient = {
     })
     if (!res.ok) throw new Error(`saveNodeConfig failed: ${res.status}`)
     return res.json()
+  },
+
+  // Authenticated with the leader's own Api-Key (no manager session needed).
+  async createNode(nodeName: string) {
+    const res = await cloudFetch('/api/v1/sync/nodes/create/', {
+      method: 'POST',
+      body: JSON.stringify({ node_name: nodeName, location_id: config.locationId }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as any
+      throw new Error(data.error || `createNode failed: ${res.status}`)
+    }
+    return res.json() as Promise<{
+      node_id: string
+      node_name: string
+      cluster_role: string
+      is_online: boolean
+    }>
+  },
+
+  async fetchNodes(sessionToken: string, locationId?: string) {
+    if (isDemoCloudBlocked()) throw new CloudBlockedError()
+    // During onboarding the local config has no location yet, so the caller
+    // (Setup Wizard) passes the manager-selected location explicitly.
+    const loc = locationId || config.locationId
+    const res = await fetch(
+      `${config.cloudBaseUrl}/api/v1/sync/nodes/?location_id=${loc}`,
+      {
+        headers: {
+          Authorization: `Bearer ${sessionToken}`,
+        },
+      },
+    )
+    if (!res.ok) throw new Error(`fetchNodes failed: ${res.status}`)
+    return res.json() as Promise<{
+      nodes: Array<{
+        node_id: string
+        node_name: string
+        cluster_role: string
+        is_online: boolean
+        lan_host?: string
+        lan_port?: number
+      }>
+    }>
+  },
+
+  async reconnectNode(sessionToken: string, nodeId: string) {
+    if (isDemoCloudBlocked()) throw new CloudBlockedError()
+    const res = await fetch(`${config.cloudBaseUrl}/api/v1/auth/reconnect-node/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ node_id: nodeId }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as any
+      throw new Error(data.error || `reconnectNode failed: ${res.status}`)
+    }
+    return res.json() as Promise<{
+      node_id: string
+      api_key: string
+      node_name: string
+      cluster_role: string
+      location: { id: string; name: string }
+    }>
+  },
+
+  // Fetch the full node inventory from Cloud using the node's own Api-Key
+  // (no manager session needed) — used by Node Management + leader bootstrap.
+  async fetchNodesByApiKey() {
+    const res = await cloudFetch(`/api/v1/sync/nodes/?location=${config.locationId}`)
+    if (!res.ok) throw new Error(`fetchNodesByApiKey failed: ${res.status}`)
+    return res.json() as Promise<{
+      nodes: Array<{
+        node_id: string
+        node_name: string
+        cluster_role: string
+        is_online: boolean
+        lan_host?: string
+        lan_port?: number
+      }>
+    }>
+  },
+
+  async fetchPrintRoutes() {
+    const res = await cloudFetch(
+      `/api/v1/sync/print-routes/?location=${config.locationId}`,
+    )
+    if (!res.ok) throw new Error(`fetchPrintRoutes failed: ${res.status}`)
+    return res.json() as Promise<{
+      stations: Array<{ code: string; name: string }>
+      print_types: string[]
+      routes: Array<{
+        station_code: string
+        station_name: string
+        print_type: string
+        assigned_node_id: string | null
+        assigned_node_name: string | null
+        node_is_online: boolean | null
+      }>
+    }>
+  },
+
+  // Authenticated with the leader's own Api-Key (no manager session needed).
+  async savePrintRoutes(
+    routes: Array<{ station_code: string; print_type: string; assigned_node_id: string | null }>,
+  ) {
+    const res = await cloudFetch('/api/v1/sync/print-routes/', {
+      method: 'POST',
+      body: JSON.stringify({ location_id: config.locationId, routes }),
+    })
+    if (!res.ok) throw new Error(`savePrintRoutes failed: ${res.status}`)
+    return res.json() as Promise<{ saved: number }>
   },
 }

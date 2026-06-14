@@ -104,6 +104,21 @@ class Command(BaseCommand):
             self.stdout.write(f'Manager user created/updated.')
 
         raw_key = ApiKeyAuth.issue_key(location)
+
+        # Seed demo print routes for KITCHEN/BAR × KOT/BILL pointing at the seed leader.
+        # Leave BAR/BILL unassigned to demonstrate the leader-prints-locally fallback.
+        from core.models import LocationNode, PrintRoute
+        leader = LocationNode.objects.get(location=location, node_id='seed-node-1')
+        for code in ['KITCHEN', 'BAR']:
+            for ptype in ['KOT', 'BILL']:
+                node = None if (code == 'BAR' and ptype == 'BILL') else leader
+                PrintRoute.objects.get_or_create(
+                    location=location,
+                    station_code=code,
+                    print_type=ptype,
+                    defaults={'assigned_node': node},
+                )
+
         t1 = Table.objects.filter(location=location, label='T1').first()
         self.stdout.write(self.style.SUCCESS('\n--- DEMO CREDENTIALS ---'))
         self.stdout.write(f'Location ID : {location.id}')

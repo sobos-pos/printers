@@ -73,6 +73,17 @@ class ActiveLeaseService:
         lease.save(
             update_fields=['active_holder', 'active_lease_expires_at', 'updated_at']
         )
+
+        # Leadership follows the lease: the holder is the one leader, everyone
+        # else (including a stale/offline ex-leader that can't self-correct) is
+        # demoted to follower in the same transaction.
+        LocationNode.objects.filter(location=location).exclude(
+            node_id=node_id
+        ).update(cluster_role='follower')
+        LocationNode.objects.filter(
+            location=location, node_id=node_id
+        ).update(cluster_role='leader')
+
         return True, {'holder': node_id}
 
     @staticmethod

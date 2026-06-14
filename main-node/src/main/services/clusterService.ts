@@ -1,5 +1,5 @@
 import { config } from '../config'
-import { clusterNodeRepository, ClusterNode } from '../repositories/clusterNodeRepository'
+import { clusterNodeRepository } from '../repositories/clusterNodeRepository'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
 import { workerManager } from '../workers/workerManager'
 
@@ -54,29 +54,6 @@ export const clusterService = {
         }
       }
     }
-  },
-
-  async registerFollower(node: {
-    node_id: string
-    node_label: string
-    station_codes: string[]
-    host: string
-    port: number
-    printer_info?: any
-  }): Promise<void> {
-    clusterNodeRepository.upsert({
-      node_id: node.node_id,
-      node_label: node.node_label,
-      station_codes: JSON.stringify(node.station_codes),
-      host: node.host,
-      port: node.port,
-      status: 'ONLINE',
-      printer_info: node.printer_info ? JSON.stringify(node.printer_info) : undefined,
-      last_health_check: new Date().toISOString(),
-      registered_at: new Date().toISOString(),
-    })
-    consecutiveFailures.set(node.node_id, 0)
-    console.log(`[Cluster] Registered follower node: ${node.node_id} (${node.node_label}) at ${node.host}:${node.port}`)
   },
 
   async forwardPrintJob(nodeId: string, payload: any): Promise<boolean> {

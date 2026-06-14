@@ -1,6 +1,7 @@
 import { config } from '../config'
 import { printJobRepository } from '../repositories/printJobRepository'
 import { printerRepository } from '../repositories/printerRepository'
+import { printRouteRepository } from '../repositories/printRouteRepository'
 import type { KotPrintPayload, KotSegment, PaperWidth } from '../types'
 import { getPrinterDriver } from './printerDriver'
 
@@ -69,47 +70,49 @@ export const printService = {
         continue
       }
 
-      // Check if this station should be printed by a remote follower node
-      // but only if we are the leader and haven't exhausted our 3 forwarding retries.
-      if (config.clusterRole === 'leader' && !config.assignedStations.includes(job.station) && job.attempt_count < 3) {
-        const { clusterNodeRepository } = await import('../repositories/clusterNodeRepository')
-        const peers = clusterNodeRepository.listAll()
-        const handler = peers.find(p => {
-          try {
-            const codes = JSON.parse(p.station_codes) as string[]
-            return codes.includes(job.station) && p.status === 'ONLINE'
-          } catch {
-            return false
-          }
-        })
+      // On the leader, check print routing to decide if this station should
+      // be forwarded to a remote follower node.
+      if (config.clusterRole === 'leader' && job.attempt_count < 3) {
+        const route = printRouteRepository.getByStationAndType(
+          config.locationId,
+          job.station,
+          job.job_type,
+        )
 
-        if (handler) {
-          console.log(`[Print] Forwarding job ${job.id} for ${job.station} to follower ${handler.node_id} (Attempt ${job.attempt_count + 1})`)
-          const payload = JSON.parse(job.payload)
-          const { clusterService } = await import('./clusterService')
-          const ok = await clusterService.forwardPrintJob(handler.node_id, {
-            job_id: job.id,
-            order_id: job.order_id,
-            station: job.station,
-            job_type: job.job_type,
-            payload: payload
-          })
+        if (route && route.assigned_node_id) {
+          const { clusterNodeRepository } = await import('../repositories/clusterNodeRepository')
+          const node = clusterNodeRepository.get(route.assigned_node_id)
 
-          if (ok) {
-            printJobRepository.markPrinted(job.id)
-            console.log(`[Print] Job ${job.id} successfully forwarded to ${handler.node_id}`)
-            continue
-          } else {
-            const next = new Date(Date.now() + 15000).toISOString() // retry after 15s
-            printJobRepository.markRetrying(
-              job.id,
-              job.attempt_count + 1,
-              next,
-              `Forwarding to follower ${handler.node_id} failed`
-            )
-            continue
+          if (node && node.status === 'ONLINE') {
+            console.log(`[Print] Forwarding job ${job.id} for ${job.station}/${job.job_type} to ${node.node_id} (Attempt ${job.attempt_count + 1})`)
+            const { clusterService } = await import('./clusterService')
+            const ok = await clusterService.forwardPrintJob(node.node_id, {
+              job_id: job.id,
+              order_id: job.order_id,
+              station: job.station,
+              job_type: job.job_type,
+              payload: JSON.parse(job.payload),
+            })
+
+            if (ok) {
+              printJobRepository.markPrinted(job.id)
+              console.log(`[Print] Job ${job.id} forwarded to ${node.node_id}`)
+              continue
+            } else {
+              const next = new Date(Date.now() + 15000).toISOString()
+              printJobRepository.markRetrying(
+                job.id,
+                job.attempt_count + 1,
+                next,
+                `Forwarding to ${node.node_id} failed`,
+              )
+              continue
+            }
           }
+          // Node offline or not found — fall through to local printing as fallback
+          console.warn(`[Print] Assigned node ${route.assigned_node_id} offline — falling back to local print`)
         }
+        // route null or assigned_node_id null → print locally (Unassigned)
       }
 
       // Local printing fallback or direct local printing

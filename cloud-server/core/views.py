@@ -145,8 +145,6 @@ class SyncHeartbeatView(View):
             node_id=data.get('node_id', ''),
             cluster_role=data.get('cluster_role', 'follower'),
             node_label=data.get('node_label', ''),
-            station_codes=data.get('station_codes', []),
-            election_priority=data.get('election_priority', 10),
             lan_host=data.get('lan_host', ''),
             lan_port=data.get('lan_port', 3001),
             node_time=data.get('node_time'),
@@ -154,6 +152,7 @@ class SyncHeartbeatView(View):
         )
         return JsonResponse({
             'status': 'ok',
+            'role': result['role'],
             'lease_renewed': result['lease_renewed'],
             'promotion_granted': result['promotion_granted'],
             'leader': result['leader'],
@@ -220,6 +219,48 @@ class SyncNodeConfigView(View):
         data = json.loads(request.body)
         NodeConfigService.save(node.location, data['node_id'], data['config'])
         return JsonResponse({'status': 'saved'})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SyncNodeOfflineView(View):
+    """POST /api/v1/sync/node-offline/ — the calling node announces it is going
+    offline (clean logout / reset), so it is immediately reclaimable."""
+
+    def post(self, request):
+        node, err = get_auth(request)
+        if err:
+            return err
+        node.is_online = False
+        node.save(update_fields=['is_online', 'updated_at'])
+        return JsonResponse({'status': 'offline', 'node_id': node.node_id})
+
+
+def get_actor_location(request, data=None):
+    """Resolve the target location for a write, accepting EITHER a node Api-Key
+    OR a manager/owner Bearer session. Returns (location, error_response)."""
+    node, err = get_auth(request)
+    if not err:
+        return node.location, None
+
+    user = get_session_user(request)
+    if not user or user.role not in ['manager', 'owner']:
+        return None, JsonResponse(
+            {'error': 'Api-Key or manager session required'}, status=401
+        )
+
+    from core.models import Location
+    location_id = (
+        (data or {}).get('location_id')
+        or request.GET.get('location')
+        or request.GET.get('location_id')
+    )
+    try:
+        location = Location.objects.get(pk=location_id)
+    except (Location.DoesNotExist, ValueError):
+        return None, JsonResponse({'error': 'Location not found'}, status=404)
+    if user.restaurant != location.restaurant:
+        return None, JsonResponse({'error': 'Location restaurant mismatch'}, status=403)
+    return location, None
 
 
 def get_session_user(request):
@@ -292,68 +333,48 @@ class AuthLoginView(View):
 
 
 @method_decorator(csrf_exempt, name='dispatch')
-class AuthProvisionNodeView(View):
-    def post(self, request):
-        user = get_session_user(request)
-        if not user or user.role not in ['manager', 'owner']:
-            return JsonResponse({'error': 'Unauthorized manager/owner action'}, status=401)
+class SyncNodesCreateView(View):
+    """POST /api/v1/sync/nodes/create/ — manager creates an offline follower node record."""
 
+    def post(self, request):
         try:
             data = json.loads(request.body)
-            location_id = data.get('location_id')
-            node_label = data.get('node_label', '')
-            station_codes = data.get('station_codes', [])
-            election_priority = data.get('election_priority', 10)
+            node_name = data.get('node_name', '').strip()
         except Exception:
             return JsonResponse({'error': 'Invalid request body'}, status=400)
 
-        from core.models import Location, LocationNode
-        import secrets
+        if not node_name:
+            return JsonResponse({'error': 'node_name is required'}, status=400)
+
+        location, err = get_actor_location(request, data)
+        if err:
+            return err
+
+        from core.models import LocationNode
         import uuid
-        from core.authentication import hash_api_key
-
-        try:
-            location = Location.objects.get(pk=location_id)
-        except Location.DoesNotExist:
-            return JsonResponse({'error': 'Location not found'}, status=404)
-
-        if user.restaurant != location.restaurant:
-            return JsonResponse({'error': 'Location restaurant mismatch'}, status=403)
-
-        node_id = f"node-{uuid.uuid4().hex[:8]}"
-        has_leader = LocationNode.objects.filter(
-            location=location,
-            cluster_role='leader',
-            is_online=True
-        ).exists()
-
-        cluster_role = 'follower' if has_leader else 'leader'
-        raw_key = secrets.token_hex(32)
-        key_hash = hash_api_key(raw_key)
 
         node = LocationNode.objects.create(
             location=location,
-            node_id=node_id,
-            node_label=node_label,
-            station_codes=station_codes,
-            election_priority=election_priority,
-            cluster_role=cluster_role,
-            api_key_hash=key_hash,
+            node_id=f"node-{uuid.uuid4().hex[:8]}",
+            node_label=node_name,
+            cluster_role='follower',
+            is_online=False,
+            api_key_hash='',
         )
 
         return JsonResponse({
             'node_id': node.node_id,
-            'api_key': f'sk_live_{raw_key}',
+            'node_name': node.node_label,
             'cluster_role': node.cluster_role,
-            'location': {
-                'id': str(location.id),
-                'name': location.name,
-            }
+            'is_online': node.is_online,
         })
 
 
 @method_decorator(csrf_exempt, name='dispatch')
-class ApprovePromotionView(View):
+class AuthReconnectNodeView(View):
+    """POST /api/v1/auth/reconnect-node/ — re-issue an API key for an existing node so a
+    fresh machine can come online as it."""
+
     def post(self, request):
         user = get_session_user(request)
         if not user or user.role not in ['manager', 'owner']:
@@ -362,40 +383,40 @@ class ApprovePromotionView(View):
         try:
             data = json.loads(request.body)
             node_id = data.get('node_id')
-            force = data.get('force', False)
         except Exception:
             return JsonResponse({'error': 'Invalid request body'}, status=400)
 
+        if not node_id:
+            return JsonResponse({'error': 'node_id is required'}, status=400)
+
         from core.models import LocationNode
+        import secrets
+        from core.authentication import hash_api_key
+
         try:
-            node = LocationNode.objects.get(node_id=node_id)
+            node = LocationNode.objects.select_related('location__restaurant').get(node_id=node_id)
         except LocationNode.DoesNotExist:
             return JsonResponse({'error': 'Node not found'}, status=404)
 
         if user.restaurant != node.location.restaurant:
             return JsonResponse({'error': 'Node restaurant mismatch'}, status=403)
 
-        status = ActiveLeaseService.status(node.location)
-        if status['is_fresh'] and not force:
-            try:
-                curr_leader = LocationNode.objects.get(location=node.location, node_id=status['holder'])
-                if curr_leader.is_online:
-                    return JsonResponse({'error': 'Current leader is still alive'}, status=409)
-            except LocationNode.DoesNotExist:
-                pass
-
-        LocationNode.objects.filter(location=node.location).update(promotion_pending=False)
-        node.promotion_pending = True
-        node.cluster_role = 'leader'
-        node.save(update_fields=['promotion_pending', 'cluster_role'])
-
-        LocationNode.objects.filter(location=node.location).exclude(node_id=node_id).update(cluster_role='follower')
-
-        ActiveLeaseService.claim(node.location, node.node_id, force=True)
+        # Hash the BARE key; the client strips the sk_live_ prefix before sending
+        # it back as `Api-Key <bare>`, matching ApiKeyAuth which hashes the bare value.
+        raw_key = secrets.token_hex(32)
+        node.api_key_hash = hash_api_key(raw_key)
+        node.is_online = True
+        node.save(update_fields=['api_key_hash', 'is_online', 'updated_at'])
 
         return JsonResponse({
-            'promoted': node.node_id,
-            'previous_leader': status['holder']
+            'node_id': node.node_id,
+            'api_key': f'sk_live_{raw_key}',
+            'node_name': node.node_label,
+            'cluster_role': node.cluster_role,
+            'location': {
+                'id': str(node.location.id),
+                'name': node.location.name,
+            },
         })
 
 
@@ -408,7 +429,7 @@ class SyncNodesView(View):
             user = get_session_user(request)
             if not user:
                 return err
-            location_id = request.GET.get('location_id')
+            location_id = request.GET.get('location_id') or request.GET.get('location')
             from core.models import Location
             try:
                 location = Location.objects.get(pk=location_id)
@@ -430,10 +451,11 @@ class SyncNodesView(View):
                 last_seen = int((timezone.now() - n.last_heartbeat_at).total_seconds())
             nodes_list.append({
                 'node_id': n.node_id,
-                'node_label': n.node_label,
+                'node_name': n.node_label,
                 'cluster_role': n.cluster_role,
-                'station_codes': n.station_codes,
                 'is_online': n.is_online,
+                'lan_host': n.lan_host,
+                'lan_port': n.lan_port,
                 'last_seen_seconds': last_seen,
             })
 
@@ -441,3 +463,80 @@ class SyncNodesView(View):
             'nodes': nodes_list,
             'lease': ActiveLeaseService.status(location)
         })
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SyncPrintRoutesView(View):
+    """
+    GET  /api/v1/sync/print-routes/  — Api-Key (node) OR Bearer session (manager).
+         Returns the station catalog, the fixed print types, and current routes.
+    POST /api/v1/sync/print-routes/  — Bearer session (manager). Upserts routes.
+    """
+
+    def get(self, request):
+        location, err = get_actor_location(request)
+        if err:
+            return err
+
+        from core.models import PrintRoute
+        from menu.models import PrinterStation
+
+        stations = list(PrinterStation.objects.filter(location=location).values('code', 'name'))
+        station_names = {s['code']: s['name'] for s in stations}
+
+        routes = []
+        qs = PrintRoute.objects.filter(location=location).select_related('assigned_node')
+        for r in qs:
+            node = r.assigned_node
+            routes.append({
+                'station_code': r.station_code,
+                'station_name': station_names.get(r.station_code, r.station_code),
+                'print_type': r.print_type,
+                'assigned_node_id': node.node_id if node else None,
+                'assigned_node_name': node.node_label if node else None,
+                'node_is_online': node.is_online if node else None,
+            })
+
+        return JsonResponse({
+            'stations': [{'code': s['code'], 'name': s['name']} for s in stations],
+            'print_types': [PrintRoute.PrintType.KOT, PrintRoute.PrintType.BILL],
+            'routes': routes,
+        })
+
+    def post(self, request):
+        try:
+            data = json.loads(request.body)
+            entries = data.get('routes', [])
+        except Exception:
+            return JsonResponse({'error': 'Invalid request body'}, status=400)
+
+        location, err = get_actor_location(request, data)
+        if err:
+            return err
+
+        from django.db import transaction
+        from core.models import LocationNode, PrintRoute
+
+        valid_types = {PrintRoute.PrintType.KOT, PrintRoute.PrintType.BILL}
+        saved = 0
+        with transaction.atomic():
+            for e in entries:
+                station_code = (e.get('station_code') or '').strip()
+                print_type = e.get('print_type')
+                if not station_code or print_type not in valid_types:
+                    continue
+                assigned_node_id = e.get('assigned_node_id')
+                node = None
+                if assigned_node_id:
+                    node = LocationNode.objects.filter(
+                        location=location, node_id=assigned_node_id
+                    ).first()
+                PrintRoute.objects.update_or_create(
+                    location=location,
+                    station_code=station_code,
+                    print_type=print_type,
+                    defaults={'assigned_node': node},
+                )
+                saved += 1
+
+        return JsonResponse({'saved': saved})

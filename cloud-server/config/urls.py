@@ -3,13 +3,13 @@ from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
 
-from core.views import HealthCheckView, AuthLoginView, AuthProvisionNodeView
+from core.views import HealthCheckView, AuthLoginView, AuthReconnectNodeView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', HealthCheckView.as_view()),
     path('api/v1/auth/login/', AuthLoginView.as_view()),
-    path('api/v1/auth/provision-node/', AuthProvisionNodeView.as_view()),
+    path('api/v1/auth/reconnect-node/', AuthReconnectNodeView.as_view()),
     path('api/v1/', include('tables.urls')),
     path('api/v1/', include('orders.urls')),
     path('api/v1/sync/', include('core.urls')),

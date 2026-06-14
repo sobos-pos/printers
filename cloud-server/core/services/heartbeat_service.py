@@ -8,21 +8,18 @@ from core.models import LocationNode
 class HeartbeatService:
 
     @staticmethod
-    def record(location, node_id: str, cluster_role: str = 'follower', node_label: str = '', station_codes=None, election_priority: int = 10, lan_host: str = '', lan_port: int = 3001, node_time=None, is_active: bool = False):
+    def record(location, node_id: str, cluster_role: str = 'follower', node_label: str = '', lan_host: str = '', lan_port: int = 3001, node_time=None, is_active: bool = False):
         """Update liveness. If this node is active and lease is vacant/expired/held by us, claim/renew it."""
         from core.services.active_lease_service import ActiveLeaseService
 
-        if station_codes is None:
-            station_codes = []
-
+        # Liveness only — the client's self-reported cluster_role is NOT trusted;
+        # the authoritative role is derived from lease ownership below.
         node, created = LocationNode.objects.get_or_create(
             location=location,
             node_id=node_id,
             defaults={
-                'cluster_role': cluster_role,
+                'cluster_role': 'follower',
                 'node_label': node_label,
-                'station_codes': station_codes,
-                'election_priority': election_priority,
                 'lan_host': lan_host,
                 'lan_port': lan_port,
                 'is_online': True,
@@ -31,25 +28,24 @@ class HeartbeatService:
         )
 
         if not created:
-            node.cluster_role = cluster_role
             node.node_label = node_label
-            node.station_codes = station_codes
-            node.election_priority = election_priority
             node.lan_host = lan_host
             node.lan_port = lan_port
             node.is_online = True
             node.last_heartbeat_at = timezone.now()
-            node.save()
+            node.save(update_fields=[
+                'node_label', 'lan_host', 'lan_port', 'is_online',
+                'last_heartbeat_at', 'updated_at',
+            ])
 
+        # Manager-approved promotion was a v1 concept; always report no promotion
+        # so the heartbeat response shape stays stable for clients.
         promotion_granted = False
-        if node.promotion_pending:
-            promotion_granted = True
-            node.promotion_pending = False
-            node.cluster_role = 'leader'
-            node.save(update_fields=['promotion_pending', 'cluster_role'])
 
+        # A node that wants to be active claims/renews the lease. claim() also
+        # demotes every other node, guaranteeing a single leader per location.
         lease_renewed = False
-        if node.cluster_role == 'leader' or is_active:
+        if is_active:
             status = ActiveLeaseService.status(location)
             if status['holder'] == node_id:
                 ActiveLeaseService.renew(location, node_id)
@@ -59,6 +55,21 @@ class HeartbeatService:
                 lease_renewed = granted
 
         lease_status = ActiveLeaseService.status(location)
+
+        # Authoritative role = lease ownership. Correct this node's stored role so
+        # an online node that lost (or never won) the lease self-demotes to follower.
+        is_holder = bool(lease_status['holder'] == node_id and lease_status['is_fresh'])
+        resolved_role = 'leader' if is_holder else 'follower'
+        if node.cluster_role != resolved_role:
+            node.cluster_role = resolved_role
+            node.save(update_fields=['cluster_role', 'updated_at'])
+
+        if is_holder:
+            # Self-heal every leader beat: no other node may stay labelled leader
+            # (covers a stale/offline ex-leader that never claims again).
+            LocationNode.objects.filter(
+                location=location, cluster_role='leader'
+            ).exclude(node_id=node_id).update(cluster_role='follower')
         leader_info = None
         if lease_status['holder']:
             try:
@@ -84,13 +95,13 @@ class HeartbeatService:
                 'node_id': p.node_id,
                 'node_label': p.node_label,
                 'cluster_role': p.cluster_role,
-                'station_codes': p.station_codes,
                 'lan_host': p.lan_host,
                 'lan_port': p.lan_port,
                 'is_online': p.is_online,
             })
 
         return {
+            'role': resolved_role,
             'lease_renewed': lease_renewed,
             'promotion_granted': promotion_granted,
             'leader': leader_info,

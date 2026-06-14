@@ -14,12 +14,24 @@ export const heartbeatWorker = {
         const response = await cloudClient.sendHeartbeat(isActive) as any
         
         if (response && typeof response === 'object') {
-          const { promotion_granted, leader, peers } = response
-          
-          if (promotion_granted && config.clusterRole === 'follower') {
-            console.log('[Heartbeat] Promotion granted by manager! Switching to leader...')
+          const { role: resolvedRole, leader, peers } = response
+
+          // Cloud is the source of truth for role (single leader per location).
+          // Adopt whatever it tells us; this is how a node that lost the lease
+          // (or a stale ex-leader) is demoted to follower automatically.
+          if (resolvedRole && resolvedRole !== config.clusterRole) {
             const { clusterService } = await import('../services/clusterService')
-            clusterService.switchToLeader()
+            if (resolvedRole === 'leader') {
+              console.log('[Heartbeat] Cloud assigned leader role — switching to leader')
+              clusterService.switchToLeader()
+            } else if (leader) {
+              console.log('[Heartbeat] Cloud assigned follower role — switching to follower')
+              clusterService.switchToFollower(leader.lan_host, leader.lan_port, leader.node_id)
+            } else {
+              const { nodeConfigRepository } = await import('../repositories/nodeConfigRepository')
+              nodeConfigRepository.set('cluster_role', 'follower')
+            }
+            return
           }
 
           if (config.clusterRole === 'follower') {
@@ -40,7 +52,7 @@ export const heartbeatWorker = {
               clusterNodeRepository.upsert({
                 node_id: peer.node_id,
                 node_label: peer.node_label,
-                station_codes: JSON.stringify(peer.station_codes),
+                station_codes: JSON.stringify(peer.station_codes ?? []),
                 host: peer.lan_host,
                 port: peer.lan_port,
                 status: peer.is_online ? 'ONLINE' : 'OFFLINE',

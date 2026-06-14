@@ -11,10 +11,15 @@ contextBridge.exposeInMainWorld('soboss', {
     ipcRenderer.on('new-kot', (_e, segment) => cb(segment))
   },
   login: (credentials: any) => ipcRenderer.invoke('login', credentials),
-  provision: (data: any) => ipcRenderer.invoke('provision', data),
-  joinCluster: (data: any) => ipcRenderer.invoke('join-cluster', data),
   clearConfig: () => ipcRenderer.invoke('clear-config'),
-  generatePairingCode: () => ipcRenderer.invoke('generate-pairing-code'),
+  // v2 node management
+  reconnectNode: (data: any) => ipcRenderer.invoke('reconnect-node', data),
+  getNodes: (data: any) => ipcRenderer.invoke('get-nodes', data),
+  createNode: (data: any) => ipcRenderer.invoke('create-node', data),
+  getPrintRoutes: () => ipcRenderer.invoke('get-print-routes'),
+  savePrintRoutes: (data: any) => ipcRenderer.invoke('save-print-routes', data),
+  getCloudNodes: () => ipcRenderer.invoke('get-cloud-nodes'),
+  getClusterNodes: () => ipcRenderer.invoke('get-cluster-nodes'),
 })
 
 declare global {
@@ -28,10 +33,14 @@ declare global {
       readKotLog: () => Promise<string>
       onNewKot: (cb: (segment: unknown) => void) => void
       login: (credentials: any) => Promise<any>
-      provision: (data: any) => Promise<any>
-      joinCluster: (data: any) => Promise<any>
       clearConfig: () => Promise<any>
-      generatePairingCode: () => Promise<{ pairing_code: string }>
+      reconnectNode: (data: any) => Promise<any>
+      getNodes: (data: any) => Promise<any>
+      createNode: (data: any) => Promise<any>
+      getPrintRoutes: () => Promise<any>
+      savePrintRoutes: (data: any) => Promise<any>
+      getCloudNodes: () => Promise<any>
+      getClusterNodes: () => Promise<any>
     }
   }
 }

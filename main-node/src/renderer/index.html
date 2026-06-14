@@ -23,7 +23,7 @@
     body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg-main); color: var(--text-main); }
     header { padding: 16px 24px; background: var(--bg-header); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; }
     header h1 { font-size: 20px; font-weight: 700; background: linear-gradient(135deg, #a5b4fc, #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    
+
     .badge { padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
     .badge-active { background: #064e3b; color: #34d399; border: 1px solid #047857; }
     .badge-standby { background: #78350f; color: #fbbf24; border: 1px solid #d97706; }
@@ -33,19 +33,19 @@
     nav button { background: none; border: none; color: var(--text-muted); padding: 10px 16px; cursor: pointer; border-radius: 6px; font-size: 14px; font-weight: 500; transition: all 0.2s ease; }
     nav button:hover { background: #1e293b; color: #fff; }
     nav button.active { background: var(--bg-card); color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid var(--border-color); }
-    
+
     main { padding: 24px; max-width: 1200px; margin: 0 auto; }
     .panel { display: none; }
     .panel.active { display: block; }
-    
+
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
     .card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); transition: transform 0.2s ease; }
     .card:hover { transform: translateY(-2px); }
     .card h3 { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
     .card p { font-size: 24px; font-weight: 700; color: #fff; }
-    
+
     pre { background: #070a12; border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.6; max-height: 500px; overflow-y: auto; white-space: pre-wrap; color: #e2e8f0; }
-    
+
     .btn { background: var(--primary); color: #fff; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
     .btn:hover { background: var(--primary-hover); transform: translateY(-1px); }
     .btn:active { transform: translateY(0); }
@@ -54,25 +54,26 @@
     .btn-secondary:hover { background: #4b5563; }
     .btn-danger { background: #991b1b; }
     .btn-danger:hover { background: #b91c1c; }
-    
+    .btn-sm { padding: 6px 14px; font-size: 13px; }
+
     table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
     th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border-color); }
     th { color: var(--text-muted); font-weight: 600; background: #0f1524; }
     tr:hover td { background: #1a253a; }
 
+    select { background: #0b0f19; border: 1px solid var(--border-color); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+    select:focus { outline: none; border-color: var(--primary); }
+
+    /* Section headings inside panels */
+    .section { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 24px; }
+    .section h2 { font-size: 15px; font-weight: 700; margin-bottom: 16px; color: var(--text-main); border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+
     /* Onboarding Setup Wizard */
-    .setup-container { max-width: 500px; margin: 40px auto; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 16px; padding: 32px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
+    .setup-container { max-width: 520px; margin: 40px auto; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 16px; padding: 32px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
     .setup-header { text-align: center; margin-bottom: 24px; }
     .setup-header h2 { font-size: 24px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .setup-header p { font-size: 14px; color: var(--text-muted); line-height: 1.5; }
-    
-    .setup-tabs { display: flex; border-bottom: 1px solid var(--border-color); margin-bottom: 24px; }
-    .setup-tabs button { flex: 1; background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); padding: 12px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s ease; }
-    .setup-tabs button.active { color: #fff; border-bottom-color: var(--primary); }
-    
-    .setup-form { display: none; }
-    .setup-form.active { display: block; }
-    
+
     .step { display: none; }
     .step.active { display: block; }
     .step h3 { font-size: 16px; font-weight: 700; margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; }
@@ -81,12 +82,16 @@
     .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
     .form-group input, .form-group select { width: 100%; padding: 12px 14px; background: #0b0f19; border: 1px solid var(--border-color); border-radius: 8px; color: #fff; font-size: 14px; transition: border-color 0.2s ease; }
     .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--primary); }
-    
-    .checkbox-group { display: flex; flex-direction: column; gap: 8px; background: #0b0f19; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); }
-    .checkbox-group label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #fff; text-transform: none; font-weight: normal; cursor: pointer; margin-bottom: 0; }
-    .checkbox-group input { width: auto; margin-right: 4px; cursor: pointer; }
 
     .error-msg { color: var(--error); font-size: 13px; margin-bottom: 16px; line-height: 1.4; display: none; background: #450a0a; border: 1px solid #7f1d1d; padding: 10px; border-radius: 6px; }
+
+    /* Offline node list in setup wizard */
+    .node-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+    .node-item { display: flex; align-items: center; justify-content: space-between; background: #0b0f19; border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; }
+    .node-item-info { display: flex; flex-direction: column; gap: 2px; }
+    .node-item-name { font-size: 14px; font-weight: 600; color: #fff; }
+    .node-item-meta { font-size: 12px; color: var(--text-muted); }
+    .node-item-status { font-size: 12px; color: var(--error); font-weight: 600; }
 
     /* Toast Notification System */
     .toast {
@@ -150,7 +155,9 @@
     <button class="active" data-panel="status">Status</button>
     <button data-panel="kotlog">KOT Log</button>
     <button data-panel="printers">Printers</button>
-    <button data-panel="ha">HA & Reset</button>
+    <button id="nav-nodes-btn" data-panel="nodes" style="display:none">Node Management</button>
+    <button id="nav-cluster-btn" data-panel="cluster" style="display:none">Cluster Status</button>
+    <button data-panel="ha">HA &amp; Reset</button>
   </nav>
   <main>
     <!-- SETUP WIZARD PANEL -->
@@ -158,79 +165,49 @@
       <div class="setup-container">
         <div class="setup-header">
           <h2>Configure Node</h2>
-          <p>Onboard this machine to handle restaurant orders and local printer configurations.</p>
-        </div>
-        
-        <div class="setup-tabs">
-          <button id="tab-btn-provision" class="active">Provision Leader</button>
-          <button id="tab-btn-join">Join Follower</button>
+          <p>Connect this machine to a pre-created node in your restaurant's cloud account.</p>
         </div>
 
-        <!-- PROVISION LEADER FORM -->
-        <div id="setup-form-provision" class="setup-form active">
-          <!-- Step 1: Login -->
-          <div id="setup-step-login" class="step active">
-            <h3>Manager Login</h3>
-            <div class="form-group">
-              <label>Email Address</label>
-              <input type="email" id="login-email" placeholder="manager@biryani.com" />
-            </div>
-            <div class="form-group">
-              <label>Password</label>
-              <input type="password" id="login-password" placeholder="••••••••" />
-            </div>
-            <div id="login-error" class="error-msg"></div>
-            <button class="btn" id="btn-login" style="width:100%">Next Step</button>
+        <!-- Step 1: Login -->
+        <div id="setup-step-login" class="step active">
+          <h3>Manager Login</h3>
+          <div class="form-group">
+            <label>Email Address</label>
+            <input type="email" id="login-email" placeholder="manager@biryani.com" />
           </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="login-password" placeholder="••••••••" />
+          </div>
+          <div id="login-error" class="error-msg"></div>
+          <button class="btn" id="btn-login" style="width:100%">Next Step</button>
+        </div>
 
-          <!-- Step 2: Location & Station Info -->
-          <div id="setup-step-details" class="step">
-            <h3>Station Details</h3>
-            <div class="form-group">
-              <label>Select Location</label>
-              <select id="select-location"></select>
-            </div>
-            <div class="form-group">
-              <label>Station Label</label>
-              <input type="text" id="provision-label" placeholder="Kitchen Station" />
-            </div>
-            <div class="form-group">
-              <label>Station Codes</label>
-              <div class="checkbox-group">
-                <label><input type="checkbox" name="provision-stations" value="KITCHEN" checked /> KITCHEN</label>
-                <label><input type="checkbox" name="provision-stations" value="BAR" /> BAR</label>
-                <label><input type="checkbox" name="provision-stations" value="DESSERT" /> DESSERT</label>
-              </div>
-            </div>
-            <div id="provision-error" class="error-msg"></div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-secondary" id="btn-provision-back" style="flex:1">Back</button>
-              <button class="btn" id="btn-provision-submit" style="flex:2">Provision Node</button>
-            </div>
+        <!-- Step 2: Select Location -->
+        <div id="setup-step-location" class="step">
+          <h3>Select Location</h3>
+          <div class="form-group">
+            <label>Location</label>
+            <select id="select-location"></select>
+          </div>
+          <div id="location-error" class="error-msg"></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" id="btn-location-back" style="flex:1">Back</button>
+            <button class="btn" id="btn-location-next" style="flex:2">Next Step</button>
           </div>
         </div>
 
-        <!-- JOIN FOLLOWER FORM -->
-        <div id="setup-form-join" class="setup-form">
-          <h3>Join Location</h3>
-          <div class="form-group">
-            <label>Pairing Code</label>
-            <input type="text" id="join-pairing-code" placeholder="Paste Base64 pairing code..." />
+        <!-- Step 3: Pick offline node -->
+        <div id="setup-step-nodes" class="step">
+          <h3>Connect to a Node</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.5">
+            Select an offline node to connect this machine to. Online nodes are already running on another machine.
+          </p>
+          <div id="node-list" class="node-list">
+            <p style="color:var(--text-muted);font-size:13px">Loading nodes…</p>
           </div>
-          <div class="form-group">
-            <label>Station Label</label>
-            <input type="text" id="join-label" placeholder="Bar Station" />
-          </div>
-          <div class="form-group">
-            <label>Station Codes</label>
-            <div class="checkbox-group">
-              <label><input type="checkbox" name="join-stations" value="KITCHEN" /> KITCHEN</label>
-              <label><input type="checkbox" name="join-stations" value="BAR" checked /> BAR</label>
-              <label><input type="checkbox" name="join-stations" value="DESSERT" /> DESSERT</label>
-            </div>
-          </div>
-          <div id="join-error" class="error-msg"></div>
-          <button class="btn" id="btn-join-submit" style="width:100%">Join Cluster</button>
+          <div id="nodes-error" class="error-msg"></div>
+          <button class="btn btn-secondary" id="btn-nodes-back" style="width:100%;margin-top:4px">Back</button>
         </div>
       </div>
     </div>
@@ -239,11 +216,11 @@
     <div id="panel-status" class="panel">
       <div class="grid" id="status-grid"></div>
     </div>
-    
+
     <div id="panel-kotlog" class="panel">
       <pre id="kot-log">Waiting for print jobs…</pre>
     </div>
-    
+
     <div id="panel-printers" class="panel">
       <p style="margin-bottom:12px;color:var(--text-muted);font-size:13px">
         Manage local receipt and kitchen printing.
@@ -255,19 +232,83 @@
       <pre id="os-printers-list" style="margin-bottom:16px;max-height:160px">Loading OS printers…</pre>
       <table id="printers-table"><thead><tr><th>ID</th><th>Name</th><th>Driver</th><th>Connection</th></tr></thead><tbody></tbody></table>
     </div>
-    
-    <div id="panel-ha" class="panel">
-      <div class="card" id="card-follower-onboarding" style="margin-bottom:24px;display:none">
-        <h3>Follower Onboarding</h3>
-        <p style="font-size:14px;color:var(--text-muted);margin:8px 0 16px 0;line-height:1.5">
-          Generate a pairing code to register new follower nodes (e.g. Bar or Kitchen stations) to this cluster.
-        </p>
-        <div style="display:flex;gap:12px;align-items:center">
-          <button class="btn" id="generate-pairing-btn">Generate Pairing Code</button>
-          <input type="text" id="generated-pairing-code" readonly style="flex:1;display:none;background:#0b0f19;border:1px solid var(--border-color);color:#fff;padding:10px 14px;border-radius:8px;font-family:monospace;font-size:13px;text-align:center" placeholder="Code will appear here..." />
+
+    <!-- NODE MANAGEMENT (Leader only) -->
+    <div id="panel-nodes" class="panel">
+      <!-- Print Routing section -->
+      <div class="section">
+        <h2>Print Routing</h2>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Assign stations to nodes for print routing. Unassigned stations print locally on this Leader.</p>
+        <table id="routing-table">
+          <thead>
+            <tr>
+              <th>Station</th>
+              <th>Type</th>
+              <th>Assigned Node</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="routing-table-body">
+            <tr><td colspan="4" style="color:var(--text-muted)">Loading…</td></tr>
+          </tbody>
+        </table>
+        <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+          <button class="btn" id="save-assignments-btn">Save Routing</button>
+          <span id="save-assignments-status" style="font-size:13px;color:var(--text-muted)"></span>
         </div>
       </div>
 
+      <!-- Nodes section -->
+      <div class="section">
+        <h2>Nodes</h2>
+        <table id="nodes-table">
+          <thead>
+            <tr>
+              <th>Node Name</th>
+              <th>Node ID</th>
+              <th>Role</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="nodes-table-body">
+            <tr><td colspan="4" style="color:var(--text-muted)">Loading…</td></tr>
+          </tbody>
+        </table>
+
+        <div style="margin-top:20px;border-top:1px solid var(--border-color);padding-top:16px">
+          <p style="font-size:13px;font-weight:600;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em">Add Node</p>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="add-node-name" placeholder="Node Name (e.g. Bar-Printer)" style="flex:1;padding:10px 14px;background:#0b0f19;border:1px solid var(--border-color);border-radius:8px;color:#fff;font-size:14px" />
+            <button class="btn" id="add-node-btn">Add Node</button>
+          </div>
+          <div id="add-node-error" style="color:var(--error);font-size:13px;margin-top:8px;display:none"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CLUSTER STATUS (Follower only) -->
+    <div id="panel-cluster" class="panel">
+      <div class="section" style="max-width:600px">
+        <h2>This Node</h2>
+        <div id="cluster-this-node" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Node Name</p><p id="cn-name" style="font-size:15px;font-weight:600"></p></div>
+          <div><p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Node ID</p><p id="cn-id" style="font-size:13px;font-family:monospace"></p></div>
+          <div><p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Role</p><p id="cn-role" style="font-size:15px;font-weight:600"></p></div>
+          <div><p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Status</p><p id="cn-status" style="font-size:15px;font-weight:600;color:var(--success)"></p></div>
+        </div>
+      </div>
+
+      <div class="section" style="max-width:600px">
+        <h2>Leader</h2>
+        <div id="cluster-leader-info" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Node Name / ID</p><p id="cl-id" style="font-size:13px;font-family:monospace"></p></div>
+          <div><p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Address</p><p id="cl-address" style="font-size:14px;font-weight:600"></p></div>
+          <div style="grid-column:1/-1"><p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Status</p><p id="cl-status" style="font-size:15px;font-weight:600"></p></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="panel-ha" class="panel">
       <div class="card" id="card-offline-emergency" style="margin-bottom:24px;display:none">
         <h3>Offline Emergency Mode</h3>
         <p style="font-size:14px;color:var(--text-muted);margin:8px 0 16px 0;line-height:1.5">
@@ -277,7 +318,7 @@
       </div>
 
       <div class="card" style="border-color:#7f1d1d;background:#2d1515">
-        <h3 style="color:#f87171">Reset & Decommission Node</h3>
+        <h3 style="color:#f87171">Reset &amp; Decommission Node</h3>
         <p style="font-size:14px;color:#fca5a5;margin:8px 0 16px 0;line-height:1.5">
           Clears all local SQLite configurations, halts active background tasks, and returns to the initial Setup Wizard.
         </p>

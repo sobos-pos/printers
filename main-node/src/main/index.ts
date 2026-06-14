@@ -17,6 +17,8 @@ import { orderRepository } from './repositories/orderRepository'
 import { printJobRepository } from './repositories/printJobRepository'
 import { syncRepository } from './repositories/syncRepository'
 import { printerRepository } from './repositories/printerRepository'
+import { printRouteRepository } from './repositories/printRouteRepository'
+import { clusterNodeRepository } from './repositories/clusterNodeRepository'
 import { resolvePreloadPath } from './paths'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -31,12 +33,57 @@ function bootstrapSync(): void {
 
 async function bootstrapAsync(): Promise<void> {
   if (isCloudConfigured()) {
+    // Restore this node's own printer/route config blob from Cloud.
     await nodeConfigService.restoreConfig().catch(() => false)
 
     if (config.clusterRole === 'leader') {
       await menuSyncService.bootstrapMenuFromCloud().catch((err) => {
         console.warn('[Boot] Menu bootstrap failed:', err)
       })
+
+      // Fresh-master restore: pull the full cluster state from Cloud so a brand-new
+      // machine taking over as leader has the node inventory + print routing
+      // immediately, without waiting for heartbeat peer discovery or a manager re-save.
+      const { cloudClient } = await import('./services/cloudClient')
+
+      await cloudClient
+        .fetchNodesByApiKey()
+        .then(({ nodes }) => {
+          for (const n of nodes) {
+            clusterNodeRepository.upsert({
+              node_id: n.node_id,
+              node_label: n.node_name,
+              station_codes: '[]',
+              host: n.lan_host ?? '',
+              port: n.lan_port ?? 3001,
+              status: n.is_online ? 'ONLINE' : 'OFFLINE',
+              last_health_check: new Date().toISOString(),
+            })
+          }
+          console.log(`[Boot] Seeded ${nodes.length} nodes from Cloud`)
+        })
+        .catch((err) => console.warn('[Boot] Node inventory pull failed:', err))
+
+      await cloudClient
+        .fetchPrintRoutes()
+        .then(({ routes }) => {
+          printRouteRepository.upsertAll(
+            config.locationId,
+            routes.map((r) => ({
+              station_code: r.station_code,
+              print_type: r.print_type,
+              assigned_node_id: r.assigned_node_id,
+            })),
+          )
+          console.log(`[Boot] Seeded ${routes.length} print routes from Cloud`)
+        })
+        .catch((err) => console.warn('[Boot] Print routes pull failed:', err))
+
+      // Back up the current local printer config so a future replacement master
+      // can restore it via restoreConfig().
+      await nodeConfigService
+        .backupConfig()
+        .catch((err) => console.warn('[Boot] Config backup failed:', err))
     }
     workerManager.bootFromState()
   } else {
@@ -94,6 +141,7 @@ function registerIpc(): void {
         demo_cloud_blocked: isDemoCloudBlocked(),
         demo_printer_offline: isDemoPrinterOffline(),
         manager_email: nodeConfigRepository.get('manager_email') || '',
+        node_label: nodeConfigRepository.get('node_label') || '',
         leader: config.clusterRole === 'follower' ? {
           node_id: leaderId,
           host: leaderHost,
@@ -130,120 +178,83 @@ function registerIpc(): void {
     return res.json()
   })
 
-  ipcMain.handle('provision', async (_e, { sessionToken, locationId, nodeLabel, stationCodes, electionPriority, managerEmail }) => {
-    const res = await fetch(`${config.cloudBaseUrl}/api/v1/auth/provision-node/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${sessionToken}`
-      },
-      body: JSON.stringify({
-        location_id: locationId,
-        node_label: nodeLabel,
-        station_codes: stationCodes,
-        election_priority: electionPriority
-      })
-    })
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({})) as any
-      throw new Error(data.error || 'Provisioning failed')
+  ipcMain.handle('reconnect-node', async (_e, { sessionToken, nodeId, managerEmail }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const data = await cloudClient.reconnectNode(sessionToken, nodeId)
+
+    const os = await import('os')
+    const nets = os.networkInterfaces()
+    let lanHost = '127.0.0.1'
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] || []) {
+        if (net.family === 'IPv4' && !net.internal) {
+          lanHost = net.address
+          break
+        }
+      }
     }
-    const data = await res.json() as any
+
     nodeConfigRepository.set('location_id', data.location.id)
     nodeConfigRepository.set('cloud_api_key', data.api_key.replace(/^sk_live_/, ''))
     nodeConfigRepository.set('node_id', data.node_id)
     nodeConfigRepository.set('cluster_role', data.cluster_role)
-    nodeConfigRepository.set('node_label', nodeLabel)
-    nodeConfigRepository.set('assigned_stations', JSON.stringify(stationCodes))
-    nodeConfigRepository.set('election_priority', String(electionPriority))
+    nodeConfigRepository.set('node_label', data.node_name)
     nodeConfigRepository.set('manager_email', managerEmail || '')
+    nodeConfigRepository.set('lan_host', lanHost)
 
-    workerManager.startWorkers(data.cluster_role)
+    workerManager.startWorkers(data.cluster_role as 'leader' | 'follower')
     return data
   })
 
-  ipcMain.handle('join-cluster', async (_e, { pairingCode, nodeLabel, stationCodes }) => {
-    const { pairingService } = await import('./services/pairingService')
-    const payload = pairingService.decodeCode(pairingCode)
-
-    const leaderUrl = `http://${payload.leader_host}:${payload.leader_port}/api/v1/cluster/register`
-    const nodeId = `node-${Math.random().toString(36).substring(2, 10)}`
-
-    const os = await import('os')
-    const nets = os.networkInterfaces()
-    let followerIp = '127.0.0.1'
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          followerIp = net.address
-          break
-        }
-      }
-    }
-
-    try {
-      const res = await fetch(leaderUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          node_id: nodeId,
-          node_label: nodeLabel,
-          station_codes: stationCodes,
-          election_priority: 10,
-          host: followerIp,
-          port: config.localApiPort
-        })
-      })
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({})) as any
-        throw new Error(data.error || 'Registration with leader failed')
-      }
-
-      const data = await res.json() as any
-
-      nodeConfigRepository.set('location_id', payload.location_id)
-      nodeConfigRepository.set('cloud_api_key', payload.cloud_api_key.replace(/^sk_live_/, ''))
-      nodeConfigRepository.set('node_id', nodeId)
-      nodeConfigRepository.set('cluster_role', 'follower')
-      nodeConfigRepository.set('node_label', nodeLabel)
-      nodeConfigRepository.set('assigned_stations', JSON.stringify(stationCodes))
-      nodeConfigRepository.set('leader_node_id', data.leader_node_id)
-      nodeConfigRepository.set('leader_host', payload.leader_host)
-      nodeConfigRepository.set('leader_port', String(payload.leader_port))
-      nodeConfigRepository.set('leader_status', 'ONLINE')
-
-      workerManager.startWorkers('follower')
-      return data
-    } catch (err: any) {
-      if (err.message.includes('fetch failed') || err.code === 'ECONNREFUSED') {
-        throw new Error(`Connection to leader failed (${leaderUrl}). Make sure the Leader node is running on the same network and its API server is active.`)
-      }
-      throw err
-    }
+  ipcMain.handle('get-nodes', async (_e, { sessionToken, locationId }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.fetchNodes(sessionToken, locationId)
   })
 
-  ipcMain.handle('generate-pairing-code', async () => {
-    if (config.clusterRole !== 'leader') {
-      throw new Error('Only leader can generate pairing codes')
-    }
-    const os = await import('os')
-    const nets = os.networkInterfaces()
-    let leaderIp = '127.0.0.1'
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          leaderIp = net.address
-          break
-        }
-      }
-    }
-    const { pairingService } = await import('./services/pairingService')
-    const code = pairingService.generateCode(leaderIp)
-    return { pairing_code: code }
+  ipcMain.handle('create-node', async (_e, { nodeName }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.createNode(nodeName)
   })
 
-  ipcMain.handle('clear-config', () => {
+  ipcMain.handle('get-print-routes', async () => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.fetchPrintRoutes()
+  })
+
+  ipcMain.handle('save-print-routes', async (_e, { routes }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.savePrintRoutes(routes)
+    // Cache locally for print routing resolution
+    printRouteRepository.upsertAll(config.locationId, routes)
+    // Persist the local config blob to Cloud so a fresh master can restore it
+    const { nodeConfigService } = await import('./services/nodeConfigService')
+    await nodeConfigService.backupConfig().catch((err) =>
+      console.warn('[Config] backup after save-print-routes failed:', err),
+    )
+    return result
+  })
+
+  // Cloud node inventory (Api-Key authed) — includes offline/never-connected nodes
+  ipcMain.handle('get-cloud-nodes', async () => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.fetchNodesByApiKey()
+  })
+
+  // Local cluster_nodes view (heartbeat-populated) — kept for diagnostics
+  ipcMain.handle('get-cluster-nodes', () => {
+    return { nodes: clusterNodeRepository.listAll() }
+  })
+
+  ipcMain.handle('clear-config', async () => {
+    // Best-effort: tell Cloud this node is going offline BEFORE wiping the API key,
+    // so it's immediately reclaimable in the Setup Wizard (no stale-online lockout).
+    if (isCloudConfigured()) {
+      const { cloudClient } = await import('./services/cloudClient')
+      await cloudClient.markOffline().catch((err) =>
+        console.warn('[Config] markOffline on reset failed:', err),
+      )
+    }
+
     nodeConfigRepository.delete('location_id')
     nodeConfigRepository.delete('cloud_api_key')
     nodeConfigRepository.delete('node_id')

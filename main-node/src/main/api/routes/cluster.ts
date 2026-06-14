@@ -14,7 +14,6 @@ export function registerClusterRoutes(app: FastifyInstance): void {
       node_id: config.nodeId,
       node_label: nodeConfigRepository.get('node_label') || '',
       cluster_role: config.clusterRole,
-      assigned_stations: config.assignedStations,
       leader: config.clusterRole === 'follower' ? {
         node_id: leaderId,
         host: leaderHost,
@@ -65,58 +64,5 @@ export function registerClusterRoutes(app: FastifyInstance): void {
     })
 
     return { job_id, status: 'QUEUED' }
-  })
-
-  app.post('/api/v1/cluster/pairing-code', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (config.clusterRole !== 'leader') {
-      reply.status(403).send({ error: 'Only leader can generate pairing codes' })
-      return
-    }
-
-    const os = await import('os')
-    const nets = os.networkInterfaces()
-    let leaderIp = '127.0.0.1'
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          leaderIp = net.address
-          break
-        }
-      }
-    }
-
-    const { pairingService } = await import('../../services/pairingService')
-    const code = pairingService.generateCode(leaderIp)
-    return { pairing_code: code }
-  })
-
-  app.post('/api/v1/cluster/register', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (config.clusterRole !== 'leader') {
-      reply.status(403).send({ error: 'Only leader can register followers' })
-      return
-    }
-
-    const { node_id, node_label, station_codes, election_priority, host, port, printer_info } = request.body as any
-
-    if (!node_id || !host) {
-      reply.status(400).send({ error: 'Missing node_id or host in registration request' })
-      return
-    }
-
-    const { clusterService } = await import('../../services/clusterService')
-    await clusterService.registerFollower({
-      node_id,
-      node_label: node_label || '',
-      station_codes: station_codes || [],
-      host,
-      port: port || 3001,
-      printer_info,
-    })
-
-    return {
-      status: 'registered',
-      location_id: config.locationId,
-      leader_node_id: config.nodeId,
-    }
   })
 }

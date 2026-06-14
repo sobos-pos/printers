@@ -66,15 +66,12 @@ class LocationNode(BaseModel):
     )
     node_id = models.CharField(max_length=64)
     node_label = models.CharField(max_length=120, blank=True)
-    station_codes = models.JSONField(default=list)
-    election_priority = models.IntegerField(default=10)
     cluster_role = models.CharField(max_length=20, default='follower')
     lan_host = models.CharField(max_length=45, blank=True)
     lan_port = models.IntegerField(default=3001)
     api_key_hash = models.CharField(max_length=128)
     last_heartbeat_at = models.DateTimeField(null=True, blank=True)
     is_online = models.BooleanField(default=False)
-    promotion_pending = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
@@ -83,6 +80,41 @@ class LocationNode(BaseModel):
 
     def __str__(self):
         return f'Node {self.node_id} ({self.node_label}) @ {self.location}'
+
+
+class PrintRoute(BaseModel):
+    """
+    Maps (location, station, print_type) → the child node that prints it.
+    assigned_node NULL means unassigned → the leader prints locally.
+    """
+
+    class PrintType(models.TextChoices):
+        KOT = 'KOT', 'KOT'
+        BILL = 'BILL', 'Bill'
+
+    location = models.ForeignKey(
+        Location, on_delete=models.CASCADE, related_name='print_routes'
+    )
+    station_code = models.CharField(max_length=20)
+    print_type = models.CharField(max_length=8, choices=PrintType.choices)
+    assigned_node = models.ForeignKey(
+        LocationNode,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='print_routes',
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['location', 'station_code', 'print_type'],
+                name='uniq_print_route',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.station_code}/{self.print_type} → {self.assigned_node_id or "local"} @ {self.location}'
 
 
 class LocationLease(BaseModel):
