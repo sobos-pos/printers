@@ -2,9 +2,9 @@
 // persisted; these are only the initial defaults / dev conveniences.
 
 export const DEFAULTS = {
-  // Dev default for the local leader node. On a real venue this is discovered via mDNS or set
-  // in Settings. Matches the main-node default local API port (3001).
-  nodeBaseUrl: 'http://localhost:3001',
+  // Empty on native — localhost on a phone points at the device itself, not the venue PC.
+  // The leader is found via mDNS or entered manually in Settings (port 3001).
+  nodeBaseUrl: '',
   // Cloud fallback base URL. Empty string => relative (only meaningful on web); set a real URL
   // for native. Override in Settings.
   cloudBaseUrl: '',
@@ -13,7 +13,7 @@ export const DEFAULTS = {
 export const NET = {
   healthTimeoutMs: 2000, // matches the web waiter page probe timeout
   reprobeIntervalMs: 20000, // re-probe every ~20s
-  mdnsBrowseTimeoutMs: 4000, // give mDNS up to 4s to surface the leader
+  mdnsBrowseTimeoutMs: 8000, // give mDNS time to surface the leader on busy Wi-Fi
   mdnsServiceType: 'soboss', // node advertises type "soboss" (=> _soboss._tcp)
 }
 
@@ -27,8 +27,11 @@ export const ORDER_SOURCE = 'Waiter_App' as const
 export const STORAGE_KEYS = {
   sessionToken: 'soboss.session_token', // SecureStore
   authContext: 'soboss.auth_context', // AsyncStorage (JSON)
-  nodeBaseUrl: 'soboss.node_base_url', // AsyncStorage
+  nodeBaseUrl: 'soboss.node_base_url', // AsyncStorage — manually-entered URL
   cloudBaseUrl: 'soboss.cloud_base_url', // AsyncStorage
+  // Last URL returned by mDNS discovery. Persisted so the app can use it immediately
+  // on the next cold start while a fresh mDNS scan runs in the background.
+  discoveredNodeUrl: 'soboss.discovered_node_url', // AsyncStorage
   tablesCachePrefix: 'soboss.tables.', // + locationId => AsyncStorage (JSON)
   menuCachePrefix: 'soboss.menu.', // + tableUuid => AsyncStorage (JSON)
 }

@@ -1,3 +1,4 @@
+import { appendFileSync, mkdirSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { config } from '../config'
 import { orderRepository } from '../repositories/orderRepository'
@@ -7,13 +8,34 @@ import { kotService } from './kotService'
 import { printService } from './printService'
 import { kdsService } from './kdsService'
 import { cloudClient } from './cloudClient'
+import { sendToRenderer } from '../windowBridge'
 import type {
   BulkOrderItem,
   CreateOrderInput,
+  KotPayload,
   LocalOrder,
   OrderStatus,
   SerializedOrder,
 } from '../types'
+
+function logKot(kot: KotPayload): void {
+  try {
+    mkdirSync(config.dataDir, { recursive: true })
+    const ts = new Date().toISOString()
+    const lines = [`[${ts}] Order: ${kot.order}  Table: ${kot.table ?? '—'}`]
+    for (const seg of kot.segments) {
+      lines.push(`  Station: ${seg.station}`)
+      for (const l of seg.lines) {
+        lines.push(`    ${l.qty}x ${l.name}${l.mods.length ? `  +${l.mods.join(', ')}` : ''}${l.notes ? `  (${l.notes})` : ''}`)
+      }
+      sendToRenderer('new-kot', { ...seg, order_id: kot.order, table: kot.table, placed_at: kot.placed_at })
+    }
+    lines.push('')
+    appendFileSync(config.kotLogPath, lines.join('\n'), 'utf-8')
+  } catch (err) {
+    console.warn('[KOT] Log write failed:', err)
+  }
+}
 
 function serializeOrder(order: LocalOrder): SerializedOrder {
   return {
@@ -126,6 +148,7 @@ export const orderService = {
     kdsService.broadcastNewOrder(serializeOrder(order))
 
     const kot = kotService.buildKot(order)
+    logKot(kot)
     printService.enqueueSegments(orderId, kot.segments, 'KOT', {
       table: kot.table,
       placedAt: kot.placed_at,

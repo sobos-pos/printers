@@ -29,7 +29,7 @@ export const config = {
   dbPath: dbPathVal,
   kotLogPath: resolve(process.cwd(), 'data/kot-log.txt'),
   dataDir: resolve(dbPathVal, '..'),
-  get bootstrapTableUuid() { return nodeConfigRepository.get('bootstrap_table_uuid') || '' },
+  get bootstrapTableUuid() { return process.env.BOOTSTRAP_TABLE_UUID || nodeConfigRepository.get('bootstrap_table_uuid') || '' },
 
   get clusterRole() { return (nodeConfigRepository.get('cluster_role') || 'follower') as 'leader' | 'follower' },
   get assignedStations() {

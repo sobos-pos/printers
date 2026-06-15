@@ -51,6 +51,13 @@ export const saveCloudBaseUrl = (url: string) =>
   AsyncStorage.setItem(STORAGE_KEYS.cloudBaseUrl, url)
 export const getCloudBaseUrl = () => AsyncStorage.getItem(STORAGE_KEYS.cloudBaseUrl)
 
+// ---- mDNS-discovered node URL (persisted across restarts) ----
+export const saveDiscoveredNodeUrl = (url: string) =>
+  AsyncStorage.setItem(STORAGE_KEYS.discoveredNodeUrl, url)
+export const getDiscoveredNodeUrl = () => AsyncStorage.getItem(STORAGE_KEYS.discoveredNodeUrl)
+export const clearDiscoveredNodeUrl = () =>
+  AsyncStorage.removeItem(STORAGE_KEYS.discoveredNodeUrl)
+
 // ---- Tables cache (cloud-only endpoint => cache for Local mode) ----
 export const saveTablesCache = (locationId: string, tables: TableSummary[]) =>
   setJson(STORAGE_KEYS.tablesCachePrefix + locationId, tables)

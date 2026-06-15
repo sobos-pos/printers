@@ -24,7 +24,7 @@ class MenuService:
 
     @staticmethod
     def get_menu_for_table(table_uuid: str) -> dict:
-        """Resolve table → location → build the full rich menu payload."""
+        """Resolve table -> location -> build the full rich menu payload."""
         table = Table.objects.select_related('location').get(
             id=table_uuid, is_active=True
         )
@@ -102,9 +102,21 @@ class MenuService:
 
     @staticmethod
     def get_menu_snapshot(location, since_version: int) -> dict | None:
-        """Return menu snapshot only if version > since_version."""
+        """Return a menu snapshot for the caller.
+
+        A node bootstraps with since_version=0 because it has no cached menu
+        yet. A freshly-seeded location also starts at MenuVersion.version == 0,
+        so the old "version <= since_version" gate (0 <= 0) meant a brand-new
+        node could never receive the menu and its local order validation would
+        permanently fail with "Menu item not found".
+
+        Fix: only treat the request as "no changes" when the caller already holds
+        a real version (since_version > 0) that is not older than ours. When
+        since_version == 0 we always return the full current menu so a node can
+        bootstrap regardless of the location's version number.
+        """
         menu_version, _ = MenuVersion.objects.get_or_create(location=location)
-        if menu_version.version <= since_version:
+        if since_version > 0 and menu_version.version <= since_version:
             return None
 
         categories = (

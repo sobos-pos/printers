@@ -128,12 +128,21 @@ class SyncOrderStatusView(View):
         if fence:
             return fence
         data = json.loads(request.body)
-        order = SyncService.apply_status_push(
-            order_uuid=str(order_uuid),
-            new_status=data['status'],
-            occurred_at=data.get('occurred_at'),
-            idempotency_key=request.headers.get('Idempotency-Key', ''),
-        )
+        try:
+            order = SyncService.apply_status_push(
+                order_uuid=str(order_uuid),
+                new_status=data['status'],
+                occurred_at=data.get('occurred_at'),
+                idempotency_key=request.headers.get('Idempotency-Key', ''),
+            )
+        except Exception as exc:
+            from django.core.exceptions import ObjectDoesNotExist
+            if isinstance(exc, ObjectDoesNotExist) or 'DoesNotExist' in type(exc).__name__:
+                return JsonResponse(
+                    {'error': {'code': 'NOT_FOUND', 'message': 'Order not found on cloud — it may not have synced yet'}},
+                    status=404,
+                )
+            raise
         from orders.serializers import serialize_order
 
         return JsonResponse(serialize_order(order))

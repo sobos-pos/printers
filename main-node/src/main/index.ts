@@ -20,6 +20,7 @@ import { printerRepository } from './repositories/printerRepository'
 import { printRouteRepository } from './repositories/printRouteRepository'
 import { clusterNodeRepository } from './repositories/clusterNodeRepository'
 import { resolvePreloadPath } from './paths'
+import { setMainWindow } from './windowBridge'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -109,7 +110,10 @@ function createWindow(): void {
     },
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
+    if (mainWindow) setMainWindow(mainWindow)
+  })
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
