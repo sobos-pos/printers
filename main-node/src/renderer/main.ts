@@ -45,7 +45,12 @@ document.querySelectorAll('nav button').forEach((btn) => {
     const panel = (btn as HTMLButtonElement).dataset.panel!
     activePanel = panel
     showPanel(panel)
-    if (panel === 'nodes') refreshNodeManagement()
+    if (panel === 'nodes') {
+      // Opening the panel is a fresh start — drop any stale unsaved-edit guard
+      // so the routing table renders the latest server state.
+      routingDirty = false
+      refreshNodeManagement()
+    }
     if (panel === 'cluster') refreshClusterStatus()
     if (panel === 'printers') refreshPrinterPanel()
   })
@@ -528,6 +533,19 @@ document.getElementById('become-active-btn')!.addEventListener('click', async ()
 // nodes are visible and selectable for routing before they have ever connected.
 let cachedNodes: any[] = []
 let cachedRoutes: any[] = []
+// True once the user touches a routing dropdown and hasn't saved yet. While set,
+// background refreshes must NOT rebuild the routing table — doing so would
+// discard the in-progress selection (and close an open dropdown). Cleared on
+// save or when the panel is (re)opened.
+let routingDirty = false
+
+// The routing table must stay stable while the user is choosing a node: skip
+// rebuilding it if there are unsaved edits OR a routing dropdown is focused/open.
+function isEditingRouting(): boolean {
+  if (routingDirty) return true
+  const el = document.activeElement as HTMLElement | null
+  return !!el && el.classList.contains('route-node-select')
+}
 
 async function refreshNodeManagement(): Promise<void> {
   try {
@@ -559,7 +577,9 @@ async function refreshNodeManagement(): Promise<void> {
     })
 
     renderNodesTable()
-    renderRoutingTable()
+    // Don't clobber an in-progress edit. The dropdowns keep their current DOM
+    // values; the table re-renders on the next idle refresh or after save.
+    if (!isEditingRouting()) renderRoutingTable()
   } catch (err: any) {
     showToast(`Failed to load node management: ${err.message}`, 'error')
   }
@@ -627,6 +647,13 @@ function renderNodesTable(): void {
   }).join('')
 }
 
+// Mark routing dirty as soon as the user changes any dropdown. Delegated on the
+// stable tbody element so it survives table re-renders (which replace innerHTML).
+document.getElementById('routing-table-body')!.addEventListener('change', (e) => {
+  const target = e.target as HTMLElement
+  if (target.classList.contains('route-node-select')) routingDirty = true
+})
+
 document.getElementById('save-assignments-btn')!.addEventListener('click', async () => {
   const statusEl = document.getElementById('save-assignments-status')!
   const btn = document.getElementById('save-assignments-btn') as HTMLButtonElement
@@ -647,6 +674,8 @@ document.getElementById('save-assignments-btn')!.addEventListener('click', async
     const result = await api().savePrintRoutes({ routes })
     statusEl.textContent = `Saved ${result.saved} routes.`
     showToast(`Print routing saved (${result.saved} routes).`, 'success')
+    // Edits are now persisted — allow the table to re-render from server state.
+    routingDirty = false
     refreshNodeManagement()
   } catch (err: any) {
     statusEl.textContent = 'Save failed.'
@@ -654,6 +683,25 @@ document.getElementById('save-assignments-btn')!.addEventListener('click', async
   } finally {
     btn.disabled = false
     btn.textContent = 'Save Routing'
+  }
+})
+
+document.getElementById('refresh-nodes-btn')!.addEventListener('click', async () => {
+  const btn = document.getElementById('refresh-nodes-btn') as HTMLButtonElement
+  const original = btn.textContent
+  btn.disabled = true
+  btn.textContent = '↻ Refreshing…'
+  try {
+    // Forces an immediate identity-verified health-check round on the leader,
+    // then re-renders, so the displayed statuses are current right now.
+    await api().refreshClusterNodes()
+    await refreshNodeManagement()
+    showToast('Node statuses refreshed.', 'success')
+  } catch (err: any) {
+    showToast(err.message || 'Failed to refresh nodes.', 'error')
+  } finally {
+    btn.disabled = false
+    btn.textContent = original || '↻ Refresh'
   }
 })
 

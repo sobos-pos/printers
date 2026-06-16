@@ -283,8 +283,11 @@
 
       <!-- Nodes section -->
       <div class="section">
-        <h2>Nodes</h2>
-        <table id="nodes-table">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <h2 style="margin:0">Nodes</h2>
+          <button class="btn" id="refresh-nodes-btn" style="padding:8px 14px;font-size:13px">↻ Refresh</button>
+        </div>
+        <table id="nodes-table" style="margin-top:16px">
           <thead>
             <tr>
               <th>Node Name</th>

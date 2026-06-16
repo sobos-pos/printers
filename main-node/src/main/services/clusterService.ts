@@ -29,10 +29,16 @@ export const clusterService = {
 
   /**
    * Cross-check follower liveness. This is a positive-evidence probe: a
-   * successful /health/ refreshes the node's contact time (→ ONLINE via the
-   * freshness model). A failure does nothing — the node simply ages out to
-   * OFFLINE once no signal (this probe OR the follower's inbound heartbeat)
-   * has arrived within the TTL. No sticky flag, no 3-strike counter.
+   * successful, IDENTITY-VERIFIED /health/ refreshes the node's contact time
+   * (→ ONLINE via the freshness model). A failure does nothing — the node simply
+   * ages out to OFFLINE once no signal (this probe OR the follower's inbound
+   * heartbeat) has arrived within the TTL. No sticky flag, no 3-strike counter.
+   *
+   * Identity matters: /health/ returns the responder's node_id. A stale or
+   * DHCP-reused LAN IP — or this machine's own IP, which several test nodes may
+   * share — can answer 200 as a DIFFERENT node. Marking the expected node online
+   * off that is exactly the "node I never started shows online" bug. So we only
+   * accept the probe when the responder's node_id matches the node we probed.
    */
   async runFollowerHealthChecks(): Promise<void> {
     const followers = clusterNodeRepository.listAll().filter((n) => n.node_id !== config.nodeId)
@@ -45,6 +51,18 @@ export const clusterService = {
         try {
           const res = await fetch(url, { signal: controller.signal })
           if (!res.ok) throw new Error(`health check returned ${res.status}`)
+          const body = (await res.json().catch(() => null)) as { node_id?: string } | null
+          if (!body || body.node_id !== node.node_id) {
+            // Someone else (or ourselves) answers at that address — not proof the
+            // expected node is up. Ignore so we don't falsely mark it online.
+            if (clusterNodeRepository.isOnline(node)) {
+              console.warn(
+                `[Cluster] ${node.node_id} probe at ${node.host}:${node.port} answered as ` +
+                  `${body?.node_id ?? 'unknown'} — stale/shared address, not marking online`,
+              )
+            }
+            return
+          }
           const wasOnline = clusterNodeRepository.isOnline(node)
           clusterNodeRepository.updateStatus(node.node_id, 'ONLINE') // refreshes contact time
           if (!wasOnline) console.log(`[Cluster] Follower ${node.node_id} is ONLINE`)

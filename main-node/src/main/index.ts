@@ -285,6 +285,23 @@ function registerIpc(): void {
     return { nodes }
   })
 
+  // Manual refresh: run an immediate identity-verified health-check round so the
+  // UI reflects real current state right away instead of waiting for the next
+  // scheduled tick. Only the leader probes; followers just re-render.
+  ipcMain.handle('refresh-cluster-nodes', async () => {
+    if (config.clusterRole === 'leader') {
+      const { clusterService } = await import('./services/clusterService')
+      await clusterService.runFollowerHealthChecks().catch((err) =>
+        console.warn('[Refresh] health check round failed:', err),
+      )
+    }
+    const nodes = clusterNodeRepository.listAll().map((n) => ({
+      ...n,
+      status: clusterNodeRepository.isOnline(n) ? 'ONLINE' : 'OFFLINE',
+    }))
+    return { nodes }
+  })
+
   ipcMain.handle('clear-config', async () => {
     // Best-effort: tell Cloud this node is going offline BEFORE wiping the API key,
     // so it's immediately reclaimable in the Setup Wizard (no stale-online lockout).

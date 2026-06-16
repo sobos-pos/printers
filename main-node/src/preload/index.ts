@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('soboss', {
   savePrintRoutes: (data: any) => ipcRenderer.invoke('save-print-routes', data),
   getCloudNodes: () => ipcRenderer.invoke('get-cloud-nodes'),
   getClusterNodes: () => ipcRenderer.invoke('get-cluster-nodes'),
+  refreshClusterNodes: () => ipcRenderer.invoke('refresh-cluster-nodes'),
 })
 
 declare global {
@@ -57,6 +58,7 @@ declare global {
       savePrintRoutes: (data: any) => Promise<any>
       getCloudNodes: () => Promise<any>
       getClusterNodes: () => Promise<any>
+      refreshClusterNodes: () => Promise<any>
     }
   }
 }
