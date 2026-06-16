@@ -4,7 +4,10 @@ import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
 import { workerManager } from '../workers/workerManager'
 
 let healthCheckInterval: NodeJS.Timeout | null = null
-const consecutiveFailures = new Map<string, number>()
+
+// LAN probes must finish well within the check interval so runs don't overlap;
+// on a healthy LAN a node that can't answer in 3s is effectively unreachable.
+const LAN_PROBE_TIMEOUT_MS = 3000
 
 export const clusterService = {
   start(): void {
@@ -13,7 +16,7 @@ export const clusterService = {
       console.log('[Cluster] Starting health check loop for followers...')
       healthCheckInterval = setInterval(() => {
         this.runFollowerHealthChecks().catch(console.error)
-      }, 15000) // every 15 seconds
+      }, config.clusterHealthCheckMs)
     }
   },
 
@@ -24,36 +27,35 @@ export const clusterService = {
     }
   },
 
+  /**
+   * Cross-check follower liveness. This is a positive-evidence probe: a
+   * successful /health/ refreshes the node's contact time (→ ONLINE via the
+   * freshness model). A failure does nothing — the node simply ages out to
+   * OFFLINE once no signal (this probe OR the follower's inbound heartbeat)
+   * has arrived within the TTL. No sticky flag, no 3-strike counter.
+   */
   async runFollowerHealthChecks(): Promise<void> {
     const followers = clusterNodeRepository.listAll().filter((n) => n.node_id !== config.nodeId)
-    for (const node of followers) {
-      const url = `http://${node.host}:${node.port}/health/`
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 5000) // 5s timeout
-
-      try {
-        const res = await fetch(url, { signal: controller.signal })
-        clearTimeout(timer)
-        if (res.ok) {
-          consecutiveFailures.set(node.node_id, 0)
-          if (node.status !== 'ONLINE') {
-            console.log(`[Cluster] Follower ${node.node_id} is back ONLINE`)
-            clusterNodeRepository.updateStatus(node.node_id, 'ONLINE')
-          }
-        } else {
-          throw new Error(`Health check returned status ${res.status}`)
+    await Promise.all(
+      followers.map(async (node) => {
+        if (!node.host) return
+        const url = `http://${node.host}:${node.port}/health/`
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), LAN_PROBE_TIMEOUT_MS)
+        try {
+          const res = await fetch(url, { signal: controller.signal })
+          if (!res.ok) throw new Error(`health check returned ${res.status}`)
+          const wasOnline = clusterNodeRepository.isOnline(node)
+          clusterNodeRepository.updateStatus(node.node_id, 'ONLINE') // refreshes contact time
+          if (!wasOnline) console.log(`[Cluster] Follower ${node.node_id} is ONLINE`)
+        } catch {
+          // No-op: let the contact time age out. We don't log every miss to
+          // avoid noise; the node flips OFFLINE automatically past the TTL.
+        } finally {
+          clearTimeout(timer)
         }
-      } catch (err: any) {
-        clearTimeout(timer)
-        const fails = (consecutiveFailures.get(node.node_id) || 0) + 1
-        consecutiveFailures.set(node.node_id, fails)
-        console.warn(`[Cluster] Follower ${node.node_id} health check failed (${fails}/3): ${err.message}`)
-        if (fails >= 3 && node.status !== 'OFFLINE') {
-          console.error(`[Cluster] Follower ${node.node_id} marked OFFLINE`)
-          clusterNodeRepository.updateStatus(node.node_id, 'OFFLINE')
-        }
-      }
-    }
+      }),
+    )
   },
 
   async forwardPrintJob(nodeId: string, payload: any): Promise<boolean> {
@@ -63,7 +65,7 @@ export const clusterService = {
     }
 
     const node = clusterNodeRepository.get(nodeId)
-    if (!node || node.status !== 'ONLINE') {
+    if (!node || !clusterNodeRepository.isOnline(node)) {
       console.warn(`[Cluster] Cannot forward print job to ${nodeId} — node is not registered or offline`)
       return false
     }

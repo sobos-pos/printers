@@ -83,7 +83,7 @@ export const printService = {
           const { clusterNodeRepository } = await import('../repositories/clusterNodeRepository')
           const node = clusterNodeRepository.get(route.assigned_node_id)
 
-          if (node && node.status === 'ONLINE') {
+          if (node && clusterNodeRepository.isOnline(node)) {
             console.log(`[Print] Forwarding job ${job.id} for ${job.station}/${job.job_type} to ${node.node_id} (Attempt ${job.attempt_count + 1})`)
             const { clusterService } = await import('./clusterService')
             const ok = await clusterService.forwardPrintJob(node.node_id, {

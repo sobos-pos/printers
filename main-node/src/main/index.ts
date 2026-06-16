@@ -60,10 +60,11 @@ async function bootstrapAsync(): Promise<void> {
               station_codes: '[]',
               host: n.lan_host ?? '',
               port: n.lan_port ?? 3001,
-              // Always seed as OFFLINE — health checks determine real status.
-              // Cloud's is_online can be 90s stale so it cannot be trusted here.
+              // Seed metadata only. Status is derived from contact freshness, and
+              // we deliberately do NOT stamp last_health_check here — a seeded node
+              // we haven't actually reached must read OFFLINE until a real heartbeat
+              // or health check arrives. (upsert preserves any genuine prior contact.)
               status: 'OFFLINE',
-              last_health_check: new Date().toISOString(),
             })
           }
           console.log(`[Boot] Seeded ${nodes.length} nodes from Cloud`)
@@ -273,9 +274,15 @@ function registerIpc(): void {
     return cloudClient.fetchNodesByApiKey()
   })
 
-  // Local cluster_nodes view (heartbeat-populated) — kept for diagnostics
+  // Local cluster_nodes view — the leader's authoritative follower status, shown
+  // in Node Management. status is derived from contact freshness (not the stored
+  // flag) so it's always live: ONLINE only with recent contact, else OFFLINE.
   ipcMain.handle('get-cluster-nodes', () => {
-    return { nodes: clusterNodeRepository.listAll() }
+    const nodes = clusterNodeRepository.listAll().map((n) => ({
+      ...n,
+      status: clusterNodeRepository.isOnline(n) ? 'ONLINE' : 'OFFLINE',
+    }))
+    return { nodes }
   })
 
   ipcMain.handle('clear-config', async () => {

@@ -18,6 +18,17 @@ export const config = {
 
   get pollIntervalMs() { return parseInt(nodeConfigRepository.get('poll_interval_ms') || '7000', 10) },
   get heartbeatMs() { return parseInt(nodeConfigRepository.get('heartbeat_interval_ms') || '30000', 10) },
+
+  // ─── LAN cluster liveness ────────────────────────────────────────────────
+  // A follower is ONLINE iff the leader had a successful contact within
+  // clusterNodeOnlineTtlMs. Two independent signals refresh that contact at
+  // leaderBeatMs / clusterHealthCheckMs, so the TTL tolerates ~2 missed beats
+  // before a node is shown OFFLINE. Keep TTL > 2× the faster of the two beats
+  // to avoid flapping on a single dropped LAN packet.
+  get leaderBeatMs() { return parseInt(nodeConfigRepository.get('leader_beat_ms') || '5000', 10) },
+  get clusterHealthCheckMs() { return parseInt(nodeConfigRepository.get('cluster_health_check_ms') || '5000', 10) },
+  get clusterNodeOnlineTtlMs() { return parseInt(nodeConfigRepository.get('cluster_node_online_ttl_ms') || '15000', 10) },
+  get clusterReportMs() { return parseInt(nodeConfigRepository.get('cluster_report_ms') || '5000', 10) },
   get printRetryBaseMs() { return parseInt(nodeConfigRepository.get('print_retry_base_ms') || '5000', 10) },
   get printRetryMaxAttempts() { return parseInt(nodeConfigRepository.get('print_retry_max_attempts') || '20', 10) },
 

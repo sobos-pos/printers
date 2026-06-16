@@ -1,4 +1,21 @@
 import { getDb } from '../db/connection'
+import { config } from '../config'
+
+// Sentinel for "the leader has never had contact with this node". Used instead
+// of now() so a node we only learned about via the cloud peer list (metadata,
+// no actual contact) does NOT look freshly online.
+export const NEVER_CONTACTED = '1970-01-01T00:00:00.000Z'
+
+/**
+ * Pure freshness check: is a contact timestamp within `ttlMs` of `now`?
+ * Returns false for the NEVER_CONTACTED sentinel and any unparseable value.
+ * Extracted so the liveness rule can be unit-tested without a database.
+ */
+export function isContactFresh(lastHealthCheck: string, ttlMs: number, now: number = Date.now()): boolean {
+  const ts = Date.parse(lastHealthCheck)
+  if (!Number.isFinite(ts)) return false
+  return now - ts <= ttlMs
+}
 
 export interface ClusterNode {
   node_id: string
@@ -24,10 +41,15 @@ export const clusterNodeRepository = {
     const label = node.node_label ?? existing?.node_label ?? ''
     const stationCodes = node.station_codes ?? existing?.station_codes ?? '[]'
     const port = node.port ?? existing?.port ?? 3001
-    const status = node.status ?? existing?.status ?? 'ONLINE'
+    // Default OFFLINE, never ONLINE: a node we merely learned about (e.g. from
+    // the cloud peer list) is not known to be reachable. ONLINE is only ever set
+    // by positive evidence — an inbound LAN heartbeat or a successful health check.
+    const status = node.status ?? existing?.status ?? 'OFFLINE'
     const electionPriority = node.election_priority ?? existing?.election_priority ?? 10
     const printerInfo = node.printer_info ?? existing?.printer_info ?? null
-    const lastHealthCheck = node.last_health_check ?? existing?.last_health_check ?? new Date().toISOString()
+    // Preserve a real prior contact time, but a brand-new metadata-only row gets
+    // the NEVER_CONTACTED sentinel (not now()) so it reads as OFFLINE until contact.
+    const lastHealthCheck = node.last_health_check ?? existing?.last_health_check ?? NEVER_CONTACTED
     const registeredAt = existing?.registered_at ?? new Date().toISOString()
 
     getDb()
@@ -62,6 +84,16 @@ export const clusterNodeRepository = {
 
   listAll(): ClusterNode[] {
     return getDb().prepare('SELECT * FROM cluster_nodes').all() as ClusterNode[]
+  },
+
+  /**
+   * Single source of truth for follower liveness: ONLINE iff the leader had a
+   * successful contact (inbound heartbeat or outbound health check) within the
+   * TTL. Freshness-based rather than a sticky flag, so a node that goes away is
+   * shown OFFLINE automatically once contact ages out — no stale ONLINE.
+   */
+  isOnline(node: Pick<ClusterNode, 'last_health_check'>): boolean {
+    return isContactFresh(node.last_health_check, config.clusterNodeOnlineTtlMs)
   },
 
   updateStatus(nodeId: string, status: 'ONLINE' | 'OFFLINE'): void {

@@ -543,9 +543,9 @@ async function refreshNodeManagement(): Promise<void> {
     const cloudNodes: any[] = nodesResult.nodes || []
     const localNodes: any[] = localResult.nodes || []
 
-    // Build a map of local health-check status (populated by the 15s check loop,
-    // 3-strike OFFLINE). This is the ONLY source of truth for follower status.
-    // Cloud's is_online is 90s stale and is completely ignored for other nodes.
+    // Build a map of local health-check status (derived from contact freshness:
+    // ONLINE only with recent LAN contact, else OFFLINE). This is the ONLY source
+    // of truth for follower status. Cloud's is_online can be stale and is ignored.
     const localStatus = new Map<string, string>(
       localNodes.map((n: any) => [n.node_id, n.status as string])
     )
@@ -738,7 +738,7 @@ setInterval(refreshKotLog, 3000)
 setInterval(() => {
   if (activePanel === 'nodes') refreshNodeManagement()
   else if (activePanel === 'cluster') refreshClusterStatus()
-}, 15000)
+}, 3000)
 
 window.addEventListener('unhandledrejection', (e) => {
   showError(e.reason instanceof Error ? e.reason.message : String(e.reason))

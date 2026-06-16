@@ -72,7 +72,8 @@ export const leaderHeartbeatWorker = {
         }
 
         const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), 5000)
+        // Keep the LAN beat timeout below leaderBeatMs so ticks don't pile up.
+        const timeout = setTimeout(() => controller.abort(), 3000)
         try {
           const res = await fetch(`http://${host}:${port}/api/v1/cluster/heartbeat`, {
             method: 'POST',
@@ -109,8 +110,8 @@ export const leaderHeartbeatWorker = {
     }
 
     tick()
-    timer = setInterval(tick, config.heartbeatMs)
-    console.log(`[LeaderHeartbeatWorker] Started (${config.heartbeatMs}ms)`)
+    timer = setInterval(tick, config.leaderBeatMs)
+    console.log(`[LeaderHeartbeatWorker] Started (${config.leaderBeatMs}ms)`)
   },
 
   stop(): void {

@@ -4,8 +4,6 @@ import { clusterNodeRepository } from '../repositories/clusterNodeRepository'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
 import { getLanIp } from '../net'
 
-const REPORT_INTERVAL_MS = 15000
-
 let timer: ReturnType<typeof setInterval> | null = null
 
 export const clusterReportWorker = {
@@ -30,7 +28,9 @@ export const clusterReportWorker = {
             cluster_role: 'follower',
             lan_host: n.host,
             lan_port: n.port,
-            status: n.status,
+            // Derive from contact freshness so the cloud mirror matches the
+            // leader's live view — never the stale stored flag.
+            status: clusterNodeRepository.isOnline(n) ? 'ONLINE' : 'OFFLINE',
             last_seen: n.last_health_check,
           }))
 
@@ -55,8 +55,8 @@ export const clusterReportWorker = {
     }
 
     tick()
-    timer = setInterval(tick, REPORT_INTERVAL_MS)
-    console.log(`[ClusterReportWorker] Started (${REPORT_INTERVAL_MS}ms)`)
+    timer = setInterval(tick, config.clusterReportMs)
+    console.log(`[ClusterReportWorker] Started (${config.clusterReportMs}ms)`)
   },
 
   stop(): void {
