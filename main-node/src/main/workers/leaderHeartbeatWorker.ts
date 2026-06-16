@@ -43,6 +43,9 @@ async function refreshLeaderFromCloud(): Promise<{ host: string; port: number } 
         nodeConfigRepository.set('leader_node_id', leader.node_id)
         nodeConfigRepository.set('leader_host', leader.lan_host)
         nodeConfigRepository.set('leader_port', String(leader.lan_port))
+        // Seed leader_status from cloud's freshness view so the UI has an
+        // initial value before the first LAN heartbeat round-trip completes.
+        nodeConfigRepository.set('leader_status', leader.is_online ? 'ONLINE' : 'OFFLINE')
         return { host: leader.lan_host, port: Number(leader.lan_port) || 3001 }
       }
     }
@@ -93,6 +96,10 @@ export const leaderHeartbeatWorker = {
           clearTimeout(timeout)
           if (!res.ok) throw new Error(`leader heartbeat returned ${res.status}`)
           consecutiveFailures = 0
+          // Leader is reachable over LAN — mark it online so the Electron UI
+          // reflects the real state. This is the only place that sets this for
+          // followers because heartbeatWorker (cloud path) only runs on the leader.
+          nodeConfigRepository.set('leader_status', 'ONLINE')
         } catch (err) {
           clearTimeout(timeout)
           consecutiveFailures += 1
@@ -101,9 +108,10 @@ export const leaderHeartbeatWorker = {
               err instanceof Error ? err.message : err
             }`,
           )
-          // The leader may have changed (manual failover). Re-learn its address
-          // from the cloud once, then keep beating over the LAN.
+          // After 3 misses, mark leader offline and re-learn its address from
+          // the cloud (covers a manual failover where the leader changed).
           if (consecutiveFailures >= 3) {
+            nodeConfigRepository.set('leader_status', 'OFFLINE')
             const learned = await refreshLeaderFromCloud()
             if (learned) consecutiveFailures = 0
           }

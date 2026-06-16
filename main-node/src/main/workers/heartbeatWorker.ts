@@ -49,14 +49,16 @@ export const heartbeatWorker = {
           if (config.clusterRole === 'leader' && Array.isArray(peers)) {
             const { clusterNodeRepository } = await import('../repositories/clusterNodeRepository')
             for (const peer of peers) {
+              // Do NOT set status here. Cloud is_online has a 90s freshness window
+              // and will keep saying ONLINE long after the node actually goes down.
+              // The local health check loop (15s, 3-strike) owns the status field.
+              // We only update metadata so the health check can reach the right address.
               clusterNodeRepository.upsert({
                 node_id: peer.node_id,
                 node_label: peer.node_label,
                 station_codes: JSON.stringify(peer.station_codes ?? []),
                 host: peer.lan_host,
                 port: peer.lan_port,
-                status: peer.is_online ? 'ONLINE' : 'OFFLINE',
-                last_health_check: new Date().toISOString(),
               })
             }
           }

@@ -38,9 +38,12 @@ function api() {
   return window.soboss
 }
 
+let activePanel = 'status'
+
 document.querySelectorAll('nav button').forEach((btn) => {
   btn.addEventListener('click', () => {
     const panel = (btn as HTMLButtonElement).dataset.panel!
+    activePanel = panel
     showPanel(panel)
     if (panel === 'nodes') refreshNodeManagement()
     if (panel === 'cluster') refreshClusterStatus()
@@ -52,9 +55,20 @@ document.querySelectorAll('nav button').forEach((btn) => {
 let sessionToken = ''
 let selectedLocationId = ''
 
+let nodeListRefreshTimer: ReturnType<typeof setInterval> | null = null
+
 function wizardGoTo(step: string): void {
   document.querySelectorAll('.step').forEach((s) => s.classList.remove('active'))
   document.getElementById(`setup-step-${step}`)?.classList.add('active')
+
+  // Auto-refresh the node list so offline nodes appear without Back→Next.
+  if (nodeListRefreshTimer) {
+    clearInterval(nodeListRefreshTimer)
+    nodeListRefreshTimer = null
+  }
+  if (step === 'nodes') {
+    nodeListRefreshTimer = setInterval(fetchAndRenderSetupNodes, 10000)
+  }
 }
 
 // Step 1 — Login
@@ -111,6 +125,69 @@ btnLogin.addEventListener('click', async () => {
 // Step 2 — Select Location
 document.getElementById('btn-location-back')!.addEventListener('click', () => wizardGoTo('login'))
 
+// A node is claimable when cloud reports it offline OR its heartbeat is stale.
+// Stale threshold aligns with the cloud's own 90 s freshness window.
+const CLAIM_STALE_SECONDS = 90
+const isClaimable = (n: any) =>
+  !n.is_online || n.last_seen_seconds == null || n.last_seen_seconds > CLAIM_STALE_SECONDS
+
+// Guard so auto-refresh doesn't re-render the list while a connect is in flight.
+let isConnectingNode = false
+
+function renderSetupNodeList(nodes: any[]): void {
+  const nodeList = document.getElementById('node-list')!
+  if (nodes.length === 0) {
+    nodeList.innerHTML = `
+      <p style="color:var(--text-muted);font-size:13px">
+        No nodes found for this location.<br>
+        Add nodes from the Leader's Node Management tab first.
+      </p>`
+    return
+  }
+
+  // Show ALL nodes — online ones are shown with a disabled button so the user
+  // can see the full picture instead of a confusing empty list.
+  nodeList.innerHTML = nodes.map((n: any) => {
+    const claimable = isClaimable(n)
+    const statusLabel = claimable
+      ? '<span style="color:var(--error)">🔴 Available</span>'
+      : '<span style="color:var(--success)">🟢 Running</span>'
+    const btnDisabled = claimable ? '' : 'disabled title="Already running on another machine"'
+    const btnStyle = claimable ? '' : 'style="opacity:0.45;cursor:not-allowed"'
+    return `
+      <div class="node-item">
+        <div class="node-item-info">
+          <span class="node-item-name">${n.node_name}</span>
+          <span class="node-item-meta">${n.node_id} &nbsp;·&nbsp; ${n.cluster_role}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          ${statusLabel}
+          <button class="btn btn-sm" data-node-id="${n.node_id}" data-node-name="${n.node_name}" ${btnDisabled} ${btnStyle}>
+            ${claimable ? 'Connect' : 'In Use'}
+          </button>
+        </div>
+      </div>`
+  }).join('')
+
+  nodeList.querySelectorAll<HTMLButtonElement>('button[data-node-id]:not([disabled])').forEach((btn) => {
+    btn.addEventListener('click', () => connectToNode(
+      btn.dataset.nodeId!,
+      btn.dataset.nodeName!,
+      btn,
+    ))
+  })
+}
+
+async function fetchAndRenderSetupNodes(): Promise<void> {
+  if (isConnectingNode || !sessionToken || !selectedLocationId) return
+  try {
+    const result = await api().getNodes({ sessionToken, locationId: selectedLocationId })
+    renderSetupNodeList(result.nodes || [])
+  } catch {
+    // Silently ignore background-refresh errors — initial load already surfaced them.
+  }
+}
+
 document.getElementById('btn-location-next')!.addEventListener('click', async () => {
   const locationError = document.getElementById('location-error')!
   locationError.style.display = 'none'
@@ -123,44 +200,8 @@ document.getElementById('btn-location-next')!.addEventListener('click', async ()
 
   try {
     const result = await api().getNodes({ sessionToken, locationId: selectedLocationId })
-    // A node is connectable if it is offline, OR its heartbeat is stale (no beat in
-    // > 2 min) — the latter covers crashes / unclean exits where the backend never
-    // got told the node went away and `is_online` is stuck true.
-    const STALE_SECONDS = 120
-    const isConnectable = (n: any) =>
-      !n.is_online || n.last_seen_seconds == null || n.last_seen_seconds > STALE_SECONDS
-    const nodes: any[] = (result.nodes || []).filter(isConnectable)
-    const nodeList = document.getElementById('node-list')!
-
-    if (nodes.length === 0) {
-      nodeList.innerHTML = `<p style="color:var(--text-muted);font-size:13px">No available nodes found for this location. Add nodes from the Leader's Node Management tab first.</p>`
-    } else {
-      nodeList.innerHTML = nodes.map((n: any) => {
-        const stale = n.is_online && n.last_seen_seconds != null && n.last_seen_seconds > STALE_SECONDS
-        const statusLabel = stale ? '🟠 Stale (reclaimable)' : '🔴 Offline'
-        return `
-        <div class="node-item">
-          <div class="node-item-info">
-            <span class="node-item-name">${n.node_name}</span>
-            <span class="node-item-meta">${n.node_id} &nbsp;·&nbsp; ${n.cluster_role}</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <span class="node-item-status">${statusLabel}</span>
-            <button class="btn btn-sm" data-node-id="${n.node_id}" data-node-name="${n.node_name}">Connect</button>
-          </div>
-        </div>
-      `}).join('')
-
-      nodeList.querySelectorAll('button[data-node-id]').forEach((btn) => {
-        btn.addEventListener('click', () => connectToNode(
-          (btn as HTMLElement).dataset.nodeId!,
-          (btn as HTMLElement).dataset.nodeName!,
-          btn as HTMLButtonElement
-        ))
-      })
-    }
-
-    wizardGoTo('nodes')
+    renderSetupNodeList(result.nodes || [])
+    wizardGoTo('nodes') // starts the 10 s auto-refresh timer via wizardGoTo
   } catch (err: any) {
     locationError.textContent = err.message || 'Failed to fetch nodes.'
     locationError.style.display = 'block'
@@ -178,6 +219,7 @@ async function connectToNode(nodeId: string, nodeName: string, btn: HTMLButtonEl
   nodesError.style.display = 'none'
   btn.disabled = true
   btn.textContent = 'Connecting…'
+  isConnectingNode = true
 
   try {
     await api().reconnectNode({
@@ -189,6 +231,8 @@ async function connectToNode(nodeId: string, nodeName: string, btn: HTMLButtonEl
     loginEmail.value = ''
     loginPassword.value = ''
     sessionToken = ''
+    // Stop polling once connected — we're leaving the setup wizard.
+    if (nodeListRefreshTimer) { clearInterval(nodeListRefreshTimer); nodeListRefreshTimer = null }
 
     showToast(`Connected as "${nodeName}" successfully.`, 'success')
     await refreshStatus()
@@ -198,6 +242,8 @@ async function connectToNode(nodeId: string, nodeName: string, btn: HTMLButtonEl
     showToast(err.message || 'Connection failed.', 'error')
     btn.disabled = false
     btn.textContent = 'Connect'
+  } finally {
+    isConnectingNode = false
   }
 }
 
@@ -485,13 +531,32 @@ let cachedRoutes: any[] = []
 
 async function refreshNodeManagement(): Promise<void> {
   try {
-    const [routesResult, nodesResult] = await Promise.all([
+    const [statusResult, routesResult, nodesResult, localResult] = await Promise.all([
+      api().getStatus(),
       api().getPrintRoutes(),
       api().getCloudNodes(),
+      api().getClusterNodes(),
     ])
 
+    const selfNodeId = String(statusResult.node_id || '')
     cachedRoutes = routesResult.routes || []
-    cachedNodes = nodesResult.nodes || []
+    const cloudNodes: any[] = nodesResult.nodes || []
+    const localNodes: any[] = localResult.nodes || []
+
+    // Build a map of local health-check status (populated by the 15s check loop,
+    // 3-strike OFFLINE). This is the ONLY source of truth for follower status.
+    // Cloud's is_online is 90s stale and is completely ignored for other nodes.
+    const localStatus = new Map<string, string>(
+      localNodes.map((n: any) => [n.node_id, n.status as string])
+    )
+
+    cachedNodes = cloudNodes.map((n: any) => {
+      // Self (the leader running this UI) — we know we're online since we're rendering.
+      if (n.node_id === selfNodeId) return { ...n, is_online: true }
+      // All other nodes: trust local health-check status only.
+      // Nodes not yet in the local DB (never connected) are treated as OFFLINE.
+      return { ...n, is_online: localStatus.get(n.node_id) === 'ONLINE' }
+    })
 
     renderNodesTable()
     renderRoutingTable()
@@ -526,6 +591,11 @@ function renderRoutingTable(): void {
 
   tbody.innerHTML = cachedRoutes.map((r: any) => {
     const selected = r.assigned_node_id || ''
+    // Look up status from cachedNodes (local health-check) so the Status column
+    // matches the dropdown indicator. r.node_is_online comes from the cloud and
+    // can be up to 90 s stale — cachedNodes is always current.
+    const assignedNode = selected ? cachedNodes.find((n: any) => n.node_id === selected) : null
+    const routeOnline: boolean | null = selected ? (assignedNode?.is_online ?? false) : null
     return `
       <tr data-station="${r.station_code}" data-type="${r.print_type}">
         <td>${escapeHtml(r.station_name || r.station_code)}</td>
@@ -535,7 +605,7 @@ function renderRoutingTable(): void {
             ${buildOptions(selected)}
           </select>
         </td>
-        <td>${onlineIcon(r.node_is_online)}</td>
+        <td>${onlineIcon(routeOnline)}</td>
       </tr>
     `
   }).join('')
@@ -664,6 +734,11 @@ refreshOsPrinters()
 refreshPrinterPanel()
 setInterval(refreshStatus, 5000)
 setInterval(refreshKotLog, 3000)
+// Auto-refresh the active panel so node/cluster status stays live without reload.
+setInterval(() => {
+  if (activePanel === 'nodes') refreshNodeManagement()
+  else if (activePanel === 'cluster') refreshClusterStatus()
+}, 15000)
 
 window.addEventListener('unhandledrejection', (e) => {
   showError(e.reason instanceof Error ? e.reason.message : String(e.reason))

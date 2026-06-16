@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'tables',
     'user_app',
     'waiter_app',
+    'super_admin',
 ]
 
 MIDDLEWARE = [

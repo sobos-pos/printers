@@ -45,6 +45,9 @@ class StaffUser(AbstractUser):
     restaurant = models.ForeignKey(
         Restaurant, related_name='staff_users', on_delete=models.CASCADE, null=True, blank=True
     )
+    location = models.ForeignKey(
+        'Location', related_name='staff_users', on_delete=models.SET_NULL, null=True, blank=True
+    )
     role = models.CharField(
         max_length=20,
         choices=[

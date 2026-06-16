@@ -35,6 +35,10 @@ class OrderService:
         table = Table.objects.select_related('location').get(id=table_uuid)
         location = table.location
 
+        if created_by and created_by.location:
+            if created_by.location != location:
+                raise ValueError("You do not have access to place orders for this location.")
+
         order_kwargs = {
             'location': location,
             'table': table,

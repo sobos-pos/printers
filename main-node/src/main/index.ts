@@ -59,7 +59,9 @@ async function bootstrapAsync(): Promise<void> {
               station_codes: '[]',
               host: n.lan_host ?? '',
               port: n.lan_port ?? 3001,
-              status: n.is_online ? 'ONLINE' : 'OFFLINE',
+              // Always seed as OFFLINE — health checks determine real status.
+              // Cloud's is_online can be 90s stale so it cannot be trusted here.
+              status: 'OFFLINE',
               last_health_check: new Date().toISOString(),
             })
           }

@@ -371,7 +371,9 @@ def get_session_user(request):
         session = SessionStore(session_key=session_key)
         user_id = session.get('_auth_user_id')
         if user_id:
-            return StaffUser.objects.get(pk=user_id)
+            user = StaffUser.objects.select_related('location', 'restaurant').get(pk=user_id)
+            if user.is_active:
+                return user
     except Exception:
         pass
     return None
@@ -382,18 +384,28 @@ def serialize_user_context(user) -> dict:
     restaurant = user.restaurant
     restaurants = []
     if restaurant:
+        if user.location:
+            locations = [user.location]
+        else:
+            locations = list(restaurant.locations.all())
         restaurants.append({
             'id': str(restaurant.id),
             'name': restaurant.name,
             'locations': [
                 {'id': str(loc.id), 'name': loc.name}
-                for loc in restaurant.locations.all()
+                for loc in locations
             ],
         })
     return {
         'user': {
             'name': user.get_full_name() or user.username,
+            'username': user.username,
+            'email': user.email,
             'role': user.role,
+            'location': (
+                {'id': str(user.location.id), 'name': user.location.name}
+                if user.location else None
+            ),
         },
         'restaurants': restaurants,
     }
@@ -420,7 +432,7 @@ class AuthLoginView(View):
             return JsonResponse({'error': 'Invalid credentials'}, status=401)
 
         authenticated_user = authenticate(username=user.username, password=password)
-        if authenticated_user is None:
+        if authenticated_user is None or not authenticated_user.is_active:
             return JsonResponse({'error': 'Invalid credentials'}, status=401)
 
         login(request, authenticated_user)
@@ -448,6 +460,26 @@ class AuthMeView(View):
         if user is None:
             return JsonResponse({'error': 'Invalid or expired token'}, status=401)
         return JsonResponse(serialize_user_context(user))
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AuthLogoutView(View):
+    """POST /api/v1/auth/logout/ — invalidate the current Bearer session token."""
+
+    def post(self, request):
+        from django.contrib.auth import logout
+        from django.contrib.sessions.backends.db import SessionStore
+
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer tok_'):
+            session_key = auth_header[len('Bearer tok_'):]
+            try:
+                session = SessionStore(session_key=session_key)
+                session.flush()
+            except Exception:
+                pass
+        logout(request)
+        return JsonResponse({'ok': True})
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -618,7 +650,7 @@ class SyncPrintRoutesView(View):
                 'print_type': r.print_type,
                 'assigned_node_id': node.node_id if node else None,
                 'assigned_node_name': node.node_label if node else None,
-                'node_is_online': node.is_online if node else None,
+                'node_is_online': is_node_fresh(node) if node else None,
             })
 
         return JsonResponse({

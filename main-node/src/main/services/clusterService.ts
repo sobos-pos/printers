@@ -112,6 +112,10 @@ export const clusterService = {
     nodeConfigRepository.set('leader_node_id', leaderNodeId)
     nodeConfigRepository.set('leader_host', leaderHost)
     nodeConfigRepository.set('leader_port', String(leaderPort))
+    // Reset to OFFLINE — the leaderHeartbeatWorker will flip it to ONLINE after
+    // the first successful LAN beat. This avoids showing stale ONLINE if we just
+    // demoted from leader where we knew ourselves to be online.
+    nodeConfigRepository.set('leader_status', 'OFFLINE')
 
     this.stop()
     workerManager.startWorkers('follower')
