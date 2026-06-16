@@ -21,6 +21,7 @@ import { printRouteRepository } from './repositories/printRouteRepository'
 import { clusterNodeRepository } from './repositories/clusterNodeRepository'
 import { resolvePreloadPath } from './paths'
 import { setMainWindow } from './windowBridge'
+import { getLanIp } from './net'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -169,6 +170,32 @@ function registerIpc(): void {
 
   ipcMain.handle('become-active', async () => {
     const { clusterService } = await import('./services/clusterService')
+
+    // Force-promotion MUST claim the cloud lease first. Otherwise we only flip
+    // the local role to leader, and the very next cloud heartbeat (is_active=true)
+    // fails to claim — the old leader still holds a fresh lease — so the cloud
+    // resolves our role back to 'follower' and heartbeatWorker demotes us within
+    // one heartbeat interval. force=true overrides a live lease and demotes the
+    // previous holder in the same transaction, making the promotion durable.
+    if (isCloudConfigured()) {
+      try {
+        const { cloudClient } = await import('./services/cloudClient')
+        const result = await cloudClient.claimActive(true)
+        if (!result.granted) {
+          return { granted: false, reason: JSON.stringify(result.detail) }
+        }
+      } catch (err) {
+        // Cloud unreachable — fall back to a local-only promotion so a LAN
+        // island can still elect a leader. The cloud reconciles on reconnect
+        // (if the real leader is alive it reclaims; if it's down our next
+        // is_active heartbeat claims the now-expired lease).
+        console.warn(
+          '[Promote] Cloud lease claim failed, promoting locally only:',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+
     clusterService.switchToLeader()
     return { granted: true }
   })
@@ -190,17 +217,7 @@ function registerIpc(): void {
     const { cloudClient } = await import('./services/cloudClient')
     const data = await cloudClient.reconnectNode(sessionToken, nodeId)
 
-    const os = await import('os')
-    const nets = os.networkInterfaces()
-    let lanHost = '127.0.0.1'
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          lanHost = net.address
-          break
-        }
-      }
-    }
+    const lanHost = getLanIp()
 
     nodeConfigRepository.set('location_id', data.location.id)
     nodeConfigRepository.set('cloud_api_key', data.api_key.replace(/^sk_live_/, ''))

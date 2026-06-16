@@ -1,22 +1,9 @@
-import os from 'os'
 import { config, isCloudConfigured } from '../config'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
+import { getLanIp } from '../net'
 
 let timer: ReturnType<typeof setInterval> | null = null
 let consecutiveFailures = 0
-
-function getLocalIp(): string {
-  // Mirror cloudClient.sendHeartbeat's adapter selection for consistency.
-  const nets = os.networkInterfaces()
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address
-      }
-    }
-  }
-  return '127.0.0.1'
-}
 
 /**
  * Learn the current leader's LAN address from the cloud (single fetch). Used on
@@ -80,7 +67,7 @@ export const leaderHeartbeatWorker = {
           node_id: config.nodeId,
           node_label: nodeConfigRepository.get('node_label') || '',
           station_codes: config.assignedStations,
-          lan_host: getLocalIp(),
+          lan_host: getLanIp(),
           lan_port: config.localApiPort,
         }
 

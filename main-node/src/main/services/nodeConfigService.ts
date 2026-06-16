@@ -1,8 +1,5 @@
-import { config } from '../config'
-import { nodeStateRepository } from '../repositories/nodeStateRepository'
 import { printerRepository } from '../repositories/printerRepository'
 import { cloudClient } from './cloudClient'
-import { workerManager } from '../workers/workerManager'
 
 export const nodeConfigService = {
   serializeConfig(): Record<string, unknown> {
@@ -48,50 +45,6 @@ export const nodeConfigService = {
       return true
     } catch {
       return false
-    }
-  },
-}
-
-export const haService = {
-  demoteToStandby(): void {
-    if (config.haMode !== 'ha') return
-    nodeStateRepository.set('role', 'standby')
-    nodeStateRepository.set('is_active', '0')
-    workerManager.startWorkers('standby')
-    console.warn('[HA] Demoted to Standby')
-  },
-
-  async activationGate(): Promise<{ granted: boolean; reason?: string }> {
-    try {
-      const status = await cloudClient.getActiveStatus()
-      if (status.is_fresh && status.holder !== config.nodeId) {
-        return {
-          granted: false,
-          reason: `Master ${status.holder} alive (${status.last_seen_seconds}s ago)`,
-        }
-      }
-    } catch {
-      // Cloud unreachable — continue to LAN probe
-    }
-
-    const claim = await cloudClient.claimActive()
-    if (!claim.granted) {
-      return { granted: false, reason: JSON.stringify(claim.detail) }
-    }
-
-    nodeStateRepository.set('role', 'active')
-    nodeStateRepository.set('is_active', '1')
-    nodeStateRepository.set('lease_renewed_at', new Date().toISOString())
-    workerManager.startWorkers('active')
-    return { granted: true }
-  },
-
-  getStatus() {
-    return {
-      node_id: config.nodeId,
-      role: nodeStateRepository.getRole(),
-      is_active: nodeStateRepository.isActive(),
-      lease_renewed_at: nodeStateRepository.get('lease_renewed_at'),
     }
   },
 }

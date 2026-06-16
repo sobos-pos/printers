@@ -22,12 +22,17 @@ ONLINE_FRESHNESS_SECONDS = 90
 
 
 def is_node_fresh(node, now=None) -> bool:
-    """Derive online status from freshness instead of the stored is_online flag.
+    """Derive online status from freshness AND the stored is_online flag.
 
-    The leader's liveness comes from its own cloud heartbeat (last_heartbeat_at);
-    a follower's liveness comes from the leader's consolidated snapshot
-    (cluster_reported_at). This avoids the 'stuck Online' bug when no sweep runs.
+    An explicit is_online=False (set by markOffline / clear-config) always wins,
+    so nodes are immediately reclaimable in the setup wizard after a clean logout.
+    Otherwise freshness is derived from the heartbeat timestamp so crashed nodes
+    (which never send an offline signal) go stale after ONLINE_FRESHNESS_SECONDS.
     """
+    # Explicit offline signal takes priority over any cached timestamp.
+    if not node.is_online:
+        return False
+
     from django.utils import timezone as _tz
 
     now = now or _tz.now()

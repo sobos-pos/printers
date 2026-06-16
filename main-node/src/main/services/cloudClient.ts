@@ -6,7 +6,7 @@ import {
   isCloudConfigured,
   isDemoCloudBlocked,
 } from '../config'
-import { haService } from './nodeConfigService'
+import { getLanIp } from '../net'
 
 const TIMEOUT_MS = 5000
 
@@ -39,7 +39,17 @@ async function cloudFetch(
     })
 
     if (res.status === 409 && options.mutating) {
-      haService.demoteToStandby()
+      // A 409 NOT_ACTIVE_HOLDER means the cloud may have reassigned the lease
+      // (e.g. another node was force-promoted). Trigger an immediate heartbeat
+      // so the authoritative role is re-resolved right away instead of waiting
+      // up to one heartbeat interval — this closes the dual-leader window. We
+      // poke the heartbeat (rather than demote outright) so a cold-booting
+      // leader whose lease merely lapsed re-claims instead of being demoted.
+      if (config.clusterRole === 'leader') {
+        import('../workers/heartbeatWorker')
+          .then(({ heartbeatWorker }) => heartbeatWorker.runNow())
+          .catch(() => {})
+      }
       throw new NotActiveHolderError()
     }
 
@@ -112,19 +122,6 @@ export const cloudClient = {
   },
 
   async sendHeartbeat(isActive: boolean) {
-    const os = await import('os')
-    const getLocalIp = () => {
-      const nets = os.networkInterfaces()
-      for (const name of Object.keys(nets)) {
-        for (const net of nets[name] || []) {
-          if (net.family === 'IPv4' && !net.internal) {
-            return net.address
-          }
-        }
-      }
-      return '127.0.0.1'
-    }
-
     const { nodeConfigRepository } = await import('../repositories/nodeConfigRepository')
     const nodeLabel = nodeConfigRepository.get('node_label') || ''
 
@@ -137,7 +134,7 @@ export const cloudClient = {
         is_active: isActive,
         cluster_role: config.clusterRole,
         node_label: nodeLabel,
-        lan_host: getLocalIp(),
+        lan_host: getLanIp(),
         lan_port: config.localApiPort,
       }),
     })

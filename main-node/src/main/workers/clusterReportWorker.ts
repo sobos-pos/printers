@@ -1,24 +1,12 @@
-import os from 'os'
 import { config, isCloudConfigured } from '../config'
 import { cloudClient } from '../services/cloudClient'
 import { clusterNodeRepository } from '../repositories/clusterNodeRepository'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
+import { getLanIp } from '../net'
 
 const REPORT_INTERVAL_MS = 15000
 
 let timer: ReturnType<typeof setInterval> | null = null
-
-function getLocalIp(): string {
-  const nets = os.networkInterfaces()
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address
-      }
-    }
-  }
-  return '127.0.0.1'
-}
 
 export const clusterReportWorker = {
   start(): void {
@@ -50,7 +38,7 @@ export const clusterReportWorker = {
           node_id: config.nodeId,
           node_label: nodeConfigRepository.get('node_label') || '',
           cluster_role: 'leader',
-          lan_host: getLocalIp(),
+          lan_host: getLanIp(),
           lan_port: config.localApiPort,
           status: 'ONLINE',
           last_seen: now,
