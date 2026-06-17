@@ -4,6 +4,7 @@ import { printerRepository } from '../repositories/printerRepository'
 import { printRouteRepository } from '../repositories/printRouteRepository'
 import type { KotPrintPayload, KotSegment, PaperWidth } from '../types'
 import { resolvePrinterDriver } from './printerDriver'
+import { recordPrintedKot } from './kotLogService'
 
 export function backoffDelayMs(attemptCount: number): number {
   const schedule = [5000, 15000, 30000, 60000]
@@ -95,7 +96,7 @@ export const printService = {
             })
 
             if (ok) {
-              printJobRepository.markPrinted(job.id)
+              printJobRepository.markForwarded(job.id)
               console.log(`[Print] Job ${job.id} forwarded to ${node.node_id}`)
               continue
             } else {
@@ -136,6 +137,9 @@ export const printService = {
       try {
         await driver.print(payload, ctx)
         printJobRepository.markPrinted(job.id)
+        // Log on the node that actually printed it (leader or follower), so each
+        // node's KOT log reflects its own output.
+        recordPrintedKot(payload)
         console.log(`[Print] Job ${job.id} → PRINTED locally`)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)

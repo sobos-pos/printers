@@ -144,6 +144,7 @@ function registerIpc(): void {
         cloud_base_url: config.cloudBaseUrl,
         cloud_configured: isCloudConfigured(),
         orders_today: orderRepository.countToday(),
+        kots_printed_today: printJobRepository.countPrintedToday(),
         pending_print_jobs:
           printJobRepository.countByStatus('PENDING') +
           printJobRepository.countByStatus('RETRYING'),

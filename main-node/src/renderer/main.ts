@@ -345,16 +345,27 @@ async function refreshStatus(): Promise<void> {
       `
     }
 
-    const cardsHtml = [
+    // Role-aware cards. A follower neither owns orders nor polls the cloud, so
+    // "Orders Processed Today" and "Sync Cursor" are meaningless there — it shows
+    // what it actually does instead: KOTs it printed and its local print queue.
+    const cards: Array<[string, unknown]> = [
       ['Node ID', s.node_id],
       ['Cluster Role', s.role],
       ['Cloud Connection', s.cloud_configured ? s.cloud_base_url : 'Not configured'],
-      ['Orders Processed Today', s.orders_today],
-      ['Pending Local Prints', s.pending_print_jobs],
-      ['Sync Cursor', s.last_cursor],
-      ['Cloud Blocked (Demo)', s.demo_cloud_blocked],
-      ['Printer Offline (Demo)', s.demo_printer_offline],
     ]
+    if (role === 'leader') {
+      cards.push(['Orders Processed Today', s.orders_today])
+      cards.push(['KOTs Printed Today', s.kots_printed_today])
+      cards.push(['Pending Local Prints', s.pending_print_jobs])
+      cards.push(['Sync Cursor', s.last_cursor])
+    } else {
+      cards.push(['KOTs Printed Today', s.kots_printed_today])
+      cards.push(['Pending Local Prints', s.pending_print_jobs])
+    }
+    cards.push(['Cloud Blocked (Demo)', s.demo_cloud_blocked])
+    cards.push(['Printer Offline (Demo)', s.demo_printer_offline])
+
+    const cardsHtml = cards
       .map(([label, val]) =>
         `<div class="card"><h3>${label}</h3><p style="font-size:${String(val).length > 25 ? '13' : '20'}px">${val}</p></div>`
       )
