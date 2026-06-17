@@ -72,8 +72,10 @@ export const printService = {
       }
 
       // On the leader, check print routing to decide if this station should
-      // be forwarded to a remote follower node.
-      if (config.clusterRole === 'leader' && job.attempt_count < 3) {
+      // be forwarded to a remote follower node. Never re-forward a job that was
+      // itself forwarded to us (a follower that booted as 'leader' must still
+      // print such jobs locally — otherwise it bounces back and never prints/logs).
+      if (config.clusterRole === 'leader' && job.attempt_count < 3 && !printJobRepository.isForwarded(job.id)) {
         const route = printRouteRepository.getByStationAndType(
           config.locationId,
           job.station,

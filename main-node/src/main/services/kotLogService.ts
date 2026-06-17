@@ -29,6 +29,7 @@ export function recordPrintedKot(payload: KotPrintPayload): void {
     lines.push('')
     appendFileSync(config.kotLogPath, lines.join('\n'), 'utf-8')
     sendToRenderer('new-kot', payload)
+    console.log(`[KOT] Logged ${payload.station} (order ${payload.order_id ?? '—'}) → ${config.kotLogPath}`)
   } catch (err) {
     console.warn('[KOT] Log write failed:', err)
   }

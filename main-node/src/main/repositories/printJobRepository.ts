@@ -79,6 +79,17 @@ export const printJobRepository = {
     return row.c
   },
 
+  // True if this job arrived as a forward FROM the leader (recorded in
+  // remote_print_jobs by the cluster receive handler). Such a job must always be
+  // printed locally by this node and never re-forwarded — that would bounce it
+  // back out and it would never print (nor log) here.
+  isForwarded(id: string): boolean {
+    const row = getDb()
+      .prepare('SELECT 1 FROM remote_print_jobs WHERE job_id = ? LIMIT 1')
+      .get(id)
+    return Boolean(row)
+  },
+
   // KOTs this node actually printed today (markPrinted stamps updated_at). Works
   // for both roles — the leader's local prints and a follower's forwarded prints.
   countPrintedToday(): number {
