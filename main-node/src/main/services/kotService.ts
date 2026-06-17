@@ -34,6 +34,7 @@ export const kotService = {
         name,
         mods: item.modifiers.map((m) => m.name_snapshot),
         notes: item.notes,
+        unit_price: Number(item.unit_price) || 0,
       })
       segmentsMap.set(station, lines)
     }

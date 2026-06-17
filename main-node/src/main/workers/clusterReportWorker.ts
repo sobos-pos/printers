@@ -50,7 +50,15 @@ export const clusterReportWorker = {
         })
         void result
       } catch (err) {
-        console.warn('[ClusterReport]', err instanceof Error ? err.message : err)
+        const msg = err instanceof Error ? err.message : String(err)
+        // 409 = the cloud lease is held by another node, so we're not the
+        // authoritative leader (yet). Expected briefly at boot before the cloud
+        // heartbeat reconciles our role — not an error, so don't alarm.
+        if (msg.includes('409')) {
+          console.log('[ClusterReport] Skipped — not the active leader yet (lease held elsewhere)')
+          return
+        }
+        console.warn('[ClusterReport]', msg)
       }
     }
 

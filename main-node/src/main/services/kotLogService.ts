@@ -18,8 +18,9 @@ export function recordPrintedKot(payload: KotPrintPayload): void {
   try {
     mkdirSync(config.dataDir, { recursive: true })
     const ts = new Date().toISOString()
+    const kind = (payload.job_type ?? 'KOT').toUpperCase()
     const lines = [
-      `[${ts}] Order: ${payload.order_id ?? '—'}  Table: ${payload.table ?? '—'}  Station: ${payload.station}`,
+      `[${ts}] ${kind}  Order: ${payload.order_id ?? '—'}  Table: ${payload.table ?? '—'}  Station: ${payload.station}`,
     ]
     for (const l of payload.lines ?? []) {
       const mods = l.mods?.length ? `  +${l.mods.join(', ')}` : ''
@@ -29,7 +30,7 @@ export function recordPrintedKot(payload: KotPrintPayload): void {
     lines.push('')
     appendFileSync(config.kotLogPath, lines.join('\n'), 'utf-8')
     sendToRenderer('new-kot', payload)
-    console.log(`[KOT] Logged ${payload.station} (order ${payload.order_id ?? '—'}) → ${config.kotLogPath}`)
+    console.log(`[KOT] Logged ${kind} ${payload.station} (order ${payload.order_id ?? '—'}) → ${config.kotLogPath}`)
   } catch (err) {
     console.warn('[KOT] Log write failed:', err)
   }

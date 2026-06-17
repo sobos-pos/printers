@@ -16,4 +16,23 @@ describe('kotFormatter', () => {
     expect(buf.length).toBeGreaterThan(20)
     expect(buf[0]).toBe(0x1b) // ESC init common in thermal output
   })
+
+  it('renders a priced BILL receipt', () => {
+    const buf = formatKotEscPos(
+      {
+        station: 'BAR',
+        order_id: 'abc-123',
+        table: 'T1',
+        placed_at: '2026-06-13T10:00:00.000Z',
+        job_type: 'BILL',
+        lines: [
+          { qty: 2, name: 'Lime Soda', mods: [], notes: '', unit_price: 50 },
+          { qty: 1, name: 'Fries', mods: [], notes: '', unit_price: 80 },
+        ],
+      },
+      '58mm',
+    )
+    expect(buf.length).toBeGreaterThan(20)
+    expect(buf[0]).toBe(0x1b)
+  })
 })

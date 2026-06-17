@@ -126,7 +126,14 @@ export const orderService = {
     kdsService.broadcastNewOrder(serializeOrder(order))
 
     const kot = kotService.buildKot(order)
+    // Each station segment produces a KOT (kitchen ticket) and a BILL (priced
+    // receipt). Both are routed independently by (station, type) so an offline
+    // follower's BILL and KOT both fall back to the leader.
     printService.enqueueSegments(orderId, kot.segments, 'KOT', {
+      table: kot.table,
+      placedAt: kot.placed_at,
+    })
+    printService.enqueueSegments(orderId, kot.segments, 'BILL', {
       table: kot.table,
       placedAt: kot.placed_at,
     })
@@ -200,6 +207,10 @@ export const orderService = {
     kdsService.broadcastNewOrder(serializeOrder(order))
     const kot = kotService.buildKot(order)
     printService.enqueueSegments(order.id, kot.segments, 'KOT', {
+      table: kot.table,
+      placedAt: kot.placed_at,
+    })
+    printService.enqueueSegments(order.id, kot.segments, 'BILL', {
       table: kot.table,
       placedAt: kot.placed_at,
     })

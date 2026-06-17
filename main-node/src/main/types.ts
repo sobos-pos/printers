@@ -54,6 +54,8 @@ export interface KotLine {
   name: string
   mods: string[]
   notes: string
+  /** Per-unit price. Used only for BILL formatting; KOT ignores it. */
+  unit_price?: number
 }
 
 export interface KotSegment {
@@ -66,6 +68,8 @@ export interface KotPrintPayload extends KotSegment {
   order_id?: string
   table?: string | null
   placed_at?: string
+  /** 'KOT' (kitchen ticket) or 'BILL' (priced receipt). Drives formatting. */
+  job_type?: string
 }
 
 export type PaperWidth = '58mm' | '80mm'

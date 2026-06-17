@@ -14,6 +14,7 @@ export function backoffDelayMs(attemptCount: number): number {
 
 function buildPrintPayload(
   segment: KotSegment,
+  jobType: string,
   meta?: { orderId?: string; table?: string | null; placedAt?: string },
 ): KotPrintPayload {
   return {
@@ -21,20 +22,29 @@ function buildPrintPayload(
     order_id: meta?.orderId,
     table: meta?.table,
     placed_at: meta?.placedAt,
+    job_type: jobType,
   }
 }
 
 export const printService = {
   resolvePrinterId(station: string, jobType = 'KOT'): string | null {
+    // 1. Exact mapping for this station + type on THIS node.
     const route = printerRepository.getRoute(station, jobType)
-    if (!route) {
-      const fallback = printerRepository.getRoute('KITCHEN', jobType)
-      return fallback?.printer_id ?? null
+    if (route) {
+      const printer = printerRepository.getPrinter(route.printer_id)
+      if (printer && printer.enabled) return printer.id
+      if (route.fallback_printer_id) return route.fallback_printer_id
+      return route.printer_id
     }
-    const printer = printerRepository.getPrinter(route.printer_id)
-    if (printer && printer.enabled) return printer.id
-    if (route.fallback_printer_id) return route.fallback_printer_id
-    return route.printer_id
+    // 2. Same node's KITCHEN mapping for this type — covers the common
+    //    single-printer setup where everything funnels to one printer.
+    const kitchen = printerRepository.getRoute('KITCHEN', jobType)
+    if (kitchen?.printer_id) return kitchen.printer_id
+    // 3. Last resort: this node's first enabled printer, so a fallback print
+    //    (e.g. the leader taking over an offline follower's station) is never
+    //    dropped just because no explicit mapping exists for that station.
+    const fallback = printerRepository.getAllPrinters().find((p) => p.enabled)
+    return fallback?.id ?? null
   },
 
   enqueueSegments(
@@ -45,7 +55,7 @@ export const printService = {
   ): void {
     for (const segment of segments) {
       const printerId = this.resolvePrinterId(segment.station, jobType)
-      const payload = buildPrintPayload(segment, {
+      const payload = buildPrintPayload(segment, jobType, {
         orderId,
         table: meta?.table,
         placedAt: meta?.placedAt,
