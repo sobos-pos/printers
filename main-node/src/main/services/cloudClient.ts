@@ -9,10 +9,14 @@ import {
 import { getLanIp } from '../net'
 
 const TIMEOUT_MS = 5000
+// Menu writes can carry base64 image payloads; the upload + server-side image
+// validation and file write easily exceed the 5 s default, so they opt into a
+// longer timeout to avoid spuriously aborting a request that actually succeeds.
+const UPLOAD_TIMEOUT_MS = 60000
 
 async function cloudFetch(
   path: string,
-  options: RequestInit & { mutating?: boolean } = {},
+  options: RequestInit & { mutating?: boolean; timeoutMs?: number } = {},
 ): Promise<Response> {
   if (isDemoCloudBlocked()) throw new CloudBlockedError()
   if (!isCloudConfigured()) throw new Error('Cloud not configured')
@@ -29,7 +33,7 @@ async function cloudFetch(
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_MS)
 
   try {
     const res = await fetch(`${config.cloudBaseUrl}${path}`, {
@@ -333,5 +337,87 @@ export const cloudClient = {
     })
     if (!res.ok) throw new Error(`savePrintRoutes failed: ${res.status}`)
     return res.json() as Promise<{ saved: number }>
+  },
+
+  // ── Menu management (Api-Key authed, scoped to this node's location) ────
+
+  async fetchMenuGlossary() {
+    const res = await cloudFetch('/api/v1/menu/glossary/')
+    if (!res.ok) throw new Error(`fetchMenuGlossary failed: ${res.status}`)
+    return res.json() as Promise<Record<string, unknown>>
+  },
+
+  async fetchMenuTree() {
+    const res = await cloudFetch('/api/v1/menu/tree/')
+    if (!res.ok) throw new Error(`fetchMenuTree failed: ${res.status}`)
+    return res.json() as Promise<{ categories: unknown[] }>
+  },
+
+  async createMenuCategory(payload: Record<string, unknown>) {
+    const res = await cloudFetch('/api/v1/menu/categories/', {
+      method: 'POST',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `createMenuCategory failed: ${res.status}`)
+    return data as { id: string; name: string }
+  },
+
+  async createMenuItem(payload: Record<string, unknown>) {
+    const res = await cloudFetch('/api/v1/menu/items/', {
+      method: 'POST',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `createMenuItem failed: ${res.status}`)
+    return data as { id: string; name: string }
+  },
+
+  async updateMenuItem(itemId: string, payload: Record<string, unknown>) {
+    const res = await cloudFetch(`/api/v1/menu/items/${itemId}/`, {
+      method: 'PATCH',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `updateMenuItem failed: ${res.status}`)
+    return data as { id: string; name: string; is_available: boolean }
+  },
+
+  async deleteMenuItem(itemId: string) {
+    const res = await cloudFetch(`/api/v1/menu/items/${itemId}/`, {
+      method: 'DELETE',
+      mutating: true,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `deleteMenuItem failed: ${res.status}`)
+    return data as { deleted: boolean }
+  },
+
+  async addMenuItemMedia(itemId: string, image: string) {
+    const res = await cloudFetch(`/api/v1/menu/items/${itemId}/media/`, {
+      method: 'POST',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify({ image }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `addMenuItemMedia failed: ${res.status}`)
+    return data as { id: string; url: string; is_primary: boolean }
+  },
+
+  async deleteMenuMedia(mediaId: string) {
+    const res = await cloudFetch(`/api/v1/menu/media/${mediaId}/`, {
+      method: 'DELETE',
+      mutating: true,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `deleteMenuMedia failed: ${res.status}`)
+    return data as { deleted: boolean }
   },
 }

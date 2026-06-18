@@ -83,11 +83,19 @@ class OrderService:
         for item_data in items:
             menu_item = menu_items[str(item_data['menu_item'])]
             variant = None
-            unit_price = menu_item.base_price
 
             if item_data.get('variant'):
+                # Variants carry the absolute price (no item-level base price).
                 variant = variants[str(item_data['variant'])]
-                unit_price += variant.price_delta
+                unit_price = variant.price
+            else:
+                # No variant chosen — price from the cheapest available variant.
+                cheapest = (
+                    menu_item.variants.filter(is_available=True)
+                    .order_by('price')
+                    .first()
+                )
+                unit_price = cheapest.price if cheapest else Decimal('0')
 
             order_item = OrderItem.objects.create(
                 order=order,
@@ -104,9 +112,9 @@ class OrderService:
                 OrderItemModifier.objects.create(
                     order_item=order_item,
                     modifier=mod,
-                    price=mod.price_delta,
+                    price=mod.price,
                 )
-                line_unit += mod.price_delta
+                line_unit += mod.price
 
             total += line_unit * order_item.quantity
 

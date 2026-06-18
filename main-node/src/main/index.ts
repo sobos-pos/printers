@@ -269,6 +269,70 @@ function registerIpc(): void {
     return result
   })
 
+  // ── Menu management (cloud is the source of truth) ──────────────────────
+  // Reads proxy straight to cloud; writes go to cloud (which bumps the menu
+  // version) and then force a local cache refresh so this node serves the
+  // updated menu immediately instead of waiting for the next poll tick.
+  const refreshMenuCache = async () => {
+    try {
+      await menuSyncService.fetchAndCacheMenu(0)
+    } catch (err) {
+      console.warn('[Menu] cache refresh after write failed:', err)
+    }
+  }
+
+  ipcMain.handle('get-menu-glossary', async () => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.fetchMenuGlossary()
+  })
+
+  ipcMain.handle('get-menu-tree', async () => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.fetchMenuTree()
+  })
+
+  ipcMain.handle('create-menu-category', async (_e, payload) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.createMenuCategory(payload)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('create-menu-item', async (_e, payload) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.createMenuItem(payload)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('update-menu-item', async (_e, { itemId, ...payload }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.updateMenuItem(itemId, payload)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('delete-menu-item', async (_e, { itemId }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.deleteMenuItem(itemId)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('add-menu-item-media', async (_e, { itemId, image }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.addMenuItemMedia(itemId, image)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('delete-menu-media', async (_e, { mediaId }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.deleteMenuMedia(mediaId)
+    await refreshMenuCache()
+    return result
+  })
+
   // Cloud node inventory (Api-Key authed) — includes offline/never-connected nodes
   ipcMain.handle('get-cloud-nodes', async () => {
     const { cloudClient } = await import('./services/cloudClient')

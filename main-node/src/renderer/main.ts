@@ -53,6 +53,7 @@ document.querySelectorAll('nav button').forEach((btn) => {
     }
     if (panel === 'cluster') refreshClusterStatus()
     if (panel === 'printers') refreshPrinterPanel()
+    if (panel === 'menu') refreshMenuPanel()
   })
 })
 
@@ -323,6 +324,8 @@ async function refreshStatus(): Promise<void> {
     const navCluster = document.getElementById('nav-cluster-btn')!
     navNodes.style.display = role === 'leader' ? 'inline-flex' : 'none'
     navCluster.style.display = role === 'follower' ? 'inline-flex' : 'none'
+    // Menu management is cloud-backed, so it's available on any configured node.
+    document.getElementById('nav-menu-btn')!.style.display = 'inline-flex'
 
     // Show/hide HA cards
     const cardEmergency = document.getElementById('card-offline-emergency')!
@@ -777,6 +780,413 @@ async function refreshClusterStatus(): Promise<void> {
     showToast(`Failed to load cluster status: ${err.message}`, 'error')
   }
 }
+
+// ─── Menu Management ──────────────────────────────────────────────────
+let menuGlossary: any = null
+let menuCategories: any[] = []
+// Base64 data URLs staged for the item currently being created.
+let pendingItemImages: string[] = []
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('Could not read file'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function renderImagePreviews(): void {
+  const wrap = document.getElementById('mi-image-previews')!
+  wrap.innerHTML = pendingItemImages.map((src, i) => `
+    <div style="position:relative;width:72px;height:72px;border-radius:8px;overflow:hidden;border:1px solid var(--border-color)">
+      <img src="${src}" style="width:100%;height:100%;object-fit:cover" />
+      <button type="button" class="mi-img-remove" data-idx="${i}"
+        style="position:absolute;top:2px;right:2px;width:18px;height:18px;line-height:16px;padding:0;border:none;border-radius:50%;background:rgba(153,27,27,0.9);color:#fff;cursor:pointer;font-size:11px">✕</button>
+    </div>`).join('')
+  wrap.querySelectorAll<HTMLButtonElement>('.mi-img-remove').forEach((b) => {
+    b.addEventListener('click', () => {
+      pendingItemImages.splice(Number(b.dataset.idx), 1)
+      renderImagePreviews()
+    })
+  })
+}
+
+function optionHtml(value: string, label: string, selected = false): string {
+  return `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`
+}
+
+function fillSelect(id: string, rows: Array<{ value: string; label: string }>, placeholder?: string): void {
+  const sel = document.getElementById(id) as HTMLSelectElement
+  if (!sel) return
+  const opts = placeholder ? [optionHtml('', placeholder)] : []
+  for (const r of rows) opts.push(optionHtml(r.value, r.label))
+  sel.innerHTML = opts.join('')
+}
+
+function taxGroupOptions(selected = ''): string {
+  const rows = (menuGlossary?.tax_groups ?? []) as any[]
+  return [
+    optionHtml('', '— No tax —', selected === ''),
+    ...rows.map((g) => optionHtml(g.slug, `${g.slug} (${g.rate}%)`, g.slug === selected)),
+  ].join('')
+}
+
+function addVariantRow(name = '', price = '', taxGroup = ''): void {
+  const tbody = document.getElementById('mi-variants-body')!
+  const tr = document.createElement('tr')
+  tr.className = 'mi-variant-row'
+  tr.innerHTML = `
+    <td><input class="mi-v-name" type="text" placeholder="e.g. Full" value="${escapeHtml(name)}"
+      style="width:100%;padding:8px 10px;background:#0b0f19;border:1px solid var(--border-color);border-radius:6px;color:#fff" /></td>
+    <td><input class="mi-v-price" type="number" min="0" step="0.01" placeholder="0.00" value="${escapeHtml(price)}"
+      style="width:110px;padding:8px 10px;background:#0b0f19;border:1px solid var(--border-color);border-radius:6px;color:#fff" /></td>
+    <td><select class="mi-v-tax">${taxGroupOptions(taxGroup)}</select></td>
+    <td><button class="btn btn-danger btn-sm mi-v-remove" type="button">✕</button></td>`
+  tbody.appendChild(tr)
+  tr.querySelector('.mi-v-remove')!.addEventListener('click', () => tr.remove())
+}
+
+let groupSeq = 0
+function addGroupRow(): void {
+  const wrap = document.getElementById('mi-groups')!
+  const id = `grp-${groupSeq++}`
+  const div = document.createElement('div')
+  div.className = 'mi-group'
+  div.dataset.id = id
+  div.style.cssText = 'border:1px solid var(--border-color);border-radius:8px;padding:12px;background:#0b0f19'
+  div.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input class="mi-g-name" type="text" placeholder="Group name (e.g. Add-ons)"
+        style="flex:1;min-width:160px;padding:8px 10px;background:#151d30;border:1px solid var(--border-color);border-radius:6px;color:#fff" />
+      <label style="font-size:12px;color:var(--text-muted)">min <input class="mi-g-min" type="number" min="0" value="0" style="width:56px;padding:6px;background:#151d30;border:1px solid var(--border-color);border-radius:6px;color:#fff" /></label>
+      <label style="font-size:12px;color:var(--text-muted)">max <input class="mi-g-max" type="number" min="1" value="1" style="width:56px;padding:6px;background:#151d30;border:1px solid var(--border-color);border-radius:6px;color:#fff" /></label>
+      <button class="btn btn-danger btn-sm mi-g-remove" type="button">Remove Group</button>
+    </div>
+    <div class="mi-g-options" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+    <button class="btn btn-secondary btn-sm mi-g-add-opt" type="button" style="margin-top:8px">+ Add Option</button>`
+  wrap.appendChild(div)
+  div.querySelector('.mi-g-remove')!.addEventListener('click', () => div.remove())
+  const addOpt = () => {
+    const optWrap = div.querySelector('.mi-g-options')!
+    const row = document.createElement('div')
+    row.className = 'mi-opt-row'
+    row.style.cssText = 'display:flex;gap:8px;align-items:center'
+    row.innerHTML = `
+      <input class="mi-o-name" type="text" placeholder="Option (e.g. Extra Cheese)"
+        style="flex:1;padding:7px 10px;background:#151d30;border:1px solid var(--border-color);border-radius:6px;color:#fff" />
+      <input class="mi-o-price" type="number" min="0" step="0.01" placeholder="+₹0"
+        style="width:90px;padding:7px 10px;background:#151d30;border:1px solid var(--border-color);border-radius:6px;color:#fff" />
+      <button class="btn btn-danger btn-sm mi-o-remove" type="button">✕</button>`
+    optWrap.appendChild(row)
+    row.querySelector('.mi-o-remove')!.addEventListener('click', () => row.remove())
+  }
+  div.querySelector('.mi-g-add-opt')!.addEventListener('click', addOpt)
+  addOpt()
+}
+
+function collectItemPayload(): any {
+  const name = (document.getElementById('mi-name') as HTMLInputElement).value.trim()
+  const category_id = (document.getElementById('mi-category') as HTMLSelectElement).value
+  const dietary = (document.getElementById('mi-dietary') as HTMLSelectElement).value
+  const gst = (document.getElementById('mi-gst') as HTMLSelectElement).value
+  const station_code = (document.getElementById('mi-station') as HTMLSelectElement).value
+  const preparation_time = (document.getElementById('mi-prep') as HTMLSelectElement).value
+
+  const tags = [dietary, gst].filter(Boolean)
+
+  const variants: any[] = []
+  document.querySelectorAll('#mi-variants-body .mi-variant-row').forEach((tr) => {
+    const vname = (tr.querySelector('.mi-v-name') as HTMLInputElement).value.trim()
+    const price = (tr.querySelector('.mi-v-price') as HTMLInputElement).value.trim()
+    const tax_group = (tr.querySelector('.mi-v-tax') as HTMLSelectElement).value
+    if (vname) variants.push({ name: vname, price: price || '0', tax_group: tax_group || null })
+  })
+
+  const modifier_groups: any[] = []
+  document.querySelectorAll('#mi-groups .mi-group').forEach((g) => {
+    const gname = (g.querySelector('.mi-g-name') as HTMLInputElement).value.trim()
+    if (!gname) return
+    const min_selection = Number((g.querySelector('.mi-g-min') as HTMLInputElement).value || 0)
+    const max_selection = Number((g.querySelector('.mi-g-max') as HTMLInputElement).value || 1)
+    const options: any[] = []
+    g.querySelectorAll('.mi-opt-row').forEach((o) => {
+      const oname = (o.querySelector('.mi-o-name') as HTMLInputElement).value.trim()
+      const oprice = (o.querySelector('.mi-o-price') as HTMLInputElement).value.trim()
+      if (oname) options.push({ name: oname, price: oprice || '0' })
+    })
+    if (options.length) modifier_groups.push({ name: gname, min_selection, max_selection, options })
+  })
+
+  return {
+    name,
+    category_id,
+    description: (document.getElementById('mi-description') as HTMLInputElement).value.trim(),
+    tags,
+    station_code: station_code || null,
+    preparation_time: preparation_time || null,
+    variants,
+    modifier_groups,
+    images: pendingItemImages.slice(),
+  }
+}
+
+function resetItemForm(): void {
+  ;(document.getElementById('mi-name') as HTMLInputElement).value = ''
+  ;(document.getElementById('mi-description') as HTMLInputElement).value = ''
+  document.getElementById('mi-variants-body')!.innerHTML = ''
+  document.getElementById('mi-groups')!.innerHTML = ''
+  pendingItemImages = []
+  ;(document.getElementById('mi-images') as HTMLInputElement).value = ''
+  renderImagePreviews()
+  addVariantRow()
+}
+
+function populateGlossarySelects(): void {
+  if (!menuGlossary) return
+  const dietary = (menuGlossary.tags?.dietary ?? []).map((t: any) => ({ value: t.slug, label: t.name }))
+  fillSelect('mi-dietary', dietary)
+  const gst = (menuGlossary.tags?.gst ?? []).map((t: any) => ({ value: t.slug, label: t.name }))
+  fillSelect('mi-gst', gst, '— None —')
+  const stations = (menuGlossary.stations ?? []).map((s: any) => ({ value: s.code, label: s.name }))
+  fillSelect('mi-station', stations, '— None —')
+  const prep = (menuGlossary.preparation_times ?? []).map((p: any) => ({ value: p.slug, label: p.label }))
+  fillSelect('mi-prep', prep, '— None —')
+}
+
+function renderCategorySelect(): void {
+  const sel = document.getElementById('mi-category') as HTMLSelectElement
+  if (!sel) return
+  sel.innerHTML = menuCategories.length
+    ? menuCategories.map((c) => optionHtml(c.id, c.name)).join('')
+    : optionHtml('', 'No categories yet — add one first')
+}
+
+function renderMenuTree(): void {
+  const root = document.getElementById('menu-tree')!
+  if (!menuCategories.length) {
+    root.innerHTML = '<p style="color:var(--text-muted);font-size:13px">No categories yet. Add a category, then add items.</p>'
+    return
+  }
+  root.innerHTML = menuCategories.map((cat) => {
+    const items = (cat.items ?? []).map((it: any) => {
+      const prices = (it.variants ?? []).map((v: any) => `${v.name} ₹${v.price}`).join(', ') || 'No variants'
+      const avail = it.is_available
+        ? '<span style="color:var(--success)">Available</span>'
+        : '<span style="color:var(--error)">Hidden</span>'
+      const media = (it.media ?? []) as Array<{ id: string; url: string; is_primary: boolean }>
+      const thumbs = media.map((m) => `
+        <div style="position:relative;width:48px;height:48px;border-radius:6px;overflow:hidden;border:1px solid var(--border-color)">
+          <img src="${escapeHtml(m.url)}" style="width:100%;height:100%;object-fit:cover" />
+          <button class="btn mi-media-del" data-media="${m.id}" title="Remove image"
+            style="position:absolute;top:1px;right:1px;width:16px;height:16px;line-height:14px;padding:0;border:none;border-radius:50%;background:rgba(153,27,27,0.9);color:#fff;cursor:pointer;font-size:10px">✕</button>
+        </div>`).join('')
+      const imageCell = `
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${thumbs || '<span style="color:var(--text-muted);font-size:12px">No image</span>'}
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+            + Add<input type="file" class="mi-media-add" data-item="${it.id}" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" />
+          </label>
+        </div>`
+      return `
+        <tr data-item="${it.id}">
+          <td>${escapeHtml(it.name)}</td>
+          <td>${imageCell}</td>
+          <td style="color:var(--text-muted);font-size:13px">${escapeHtml(prices)}</td>
+          <td>${avail}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <button class="btn btn-secondary btn-sm mi-toggle" data-item="${it.id}" data-avail="${it.is_available}">${it.is_available ? 'Hide' : 'Show'}</button>
+            <button class="btn btn-danger btn-sm mi-del" data-item="${it.id}" data-name="${escapeHtml(it.name)}">Delete</button>
+          </td>
+        </tr>`
+    }).join('')
+    return `
+      <div style="margin-bottom:18px">
+        <h3 style="font-size:14px;margin-bottom:6px;color:#fff">${escapeHtml(cat.name)}</h3>
+        <table>
+          <thead><tr><th>Item</th><th>Images</th><th>Variants</th><th>Status</th><th></th></tr></thead>
+          <tbody>${items || '<tr><td colspan="5" style="color:var(--text-muted)">No items</td></tr>'}</tbody>
+        </table>
+      </div>`
+  }).join('')
+
+  root.querySelectorAll<HTMLButtonElement>('.mi-toggle').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const itemId = btn.dataset.item!
+      const makeAvailable = btn.dataset.avail !== 'true'
+      btn.disabled = true
+      try {
+        await api().updateMenuItem({ itemId, is_available: makeAvailable })
+        showToast('Item updated.', 'success')
+        await loadMenuTree()
+      } catch (err: any) {
+        showToast(err.message || 'Update failed.', 'error')
+        btn.disabled = false
+      }
+    })
+  })
+  root.querySelectorAll<HTMLButtonElement>('.mi-del').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Delete "${btn.dataset.name}"? This removes it from the menu everywhere.`)) return
+      btn.disabled = true
+      try {
+        await api().deleteMenuItem({ itemId: btn.dataset.item! })
+        showToast('Item deleted.', 'success')
+        await loadMenuTree()
+      } catch (err: any) {
+        showToast(err.message || 'Delete failed.', 'error')
+        btn.disabled = false
+      }
+    })
+  })
+  root.querySelectorAll<HTMLInputElement>('.mi-media-add').forEach((input) => {
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      if (file.size > 10 * 1024 * 1024) { showToast('Image larger than 10 MB.', 'warning'); return }
+      try {
+        const image = await readFileAsDataUrl(file)
+        await api().addMenuItemMedia({ itemId: input.dataset.item!, image })
+        showToast('Image added.', 'success')
+        await loadMenuTree()
+      } catch (err: any) {
+        showToast(err.message || 'Image upload failed.', 'error')
+      }
+    })
+  })
+  root.querySelectorAll<HTMLButtonElement>('.mi-media-del').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      try {
+        await api().deleteMenuMedia({ mediaId: btn.dataset.media! })
+        showToast('Image removed.', 'success')
+        await loadMenuTree()
+      } catch (err: any) {
+        showToast(err.message || 'Failed to remove image.', 'error')
+        btn.disabled = false
+      }
+    })
+  })
+}
+
+async function loadMenuTree(): Promise<void> {
+  const result = await api().getMenuTree()
+  menuCategories = result.categories || []
+  renderCategorySelect()
+  renderMenuTree()
+}
+
+let menuPanelLoading = false
+async function refreshMenuPanel(): Promise<void> {
+  if (menuPanelLoading) return
+  menuPanelLoading = true
+  try {
+    if (!menuGlossary) {
+      menuGlossary = await api().getMenuGlossary()
+      populateGlossarySelects()
+    }
+    await loadMenuTree()
+    if (!document.querySelector('#mi-variants-body .mi-variant-row')) addVariantRow()
+  } catch (err: any) {
+    document.getElementById('menu-tree')!.innerHTML =
+      `<p style="color:var(--error);font-size:13px">${escapeHtml(err.message || String(err))}</p>`
+  } finally {
+    menuPanelLoading = false
+  }
+}
+
+document.getElementById('menu-refresh-btn')!.addEventListener('click', async () => {
+  menuGlossary = null
+  await refreshMenuPanel()
+  showToast('Menu refreshed.', 'success')
+})
+
+document.getElementById('mi-add-variant-btn')!.addEventListener('click', () => addVariantRow())
+document.getElementById('mi-add-group-btn')!.addEventListener('click', () => addGroupRow())
+
+document.getElementById('mi-images')!.addEventListener('change', async (e) => {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  for (const file of files) {
+    if (file.size > 10 * 1024 * 1024) {
+      showToast(`"${file.name}" is larger than 10 MB and was skipped.`, 'warning')
+      continue
+    }
+    try {
+      pendingItemImages.push(await readFileAsDataUrl(file))
+    } catch {
+      showToast(`Could not read "${file.name}".`, 'error')
+    }
+  }
+  input.value = '' // allow re-selecting the same file
+  renderImagePreviews()
+})
+
+let pendingCategoryImage: string | null = null
+document.getElementById('menu-cat-image')!.addEventListener('change', async (e) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  const label = document.getElementById('menu-cat-image-label')!
+  if (!file) { pendingCategoryImage = null; label.textContent = 'Choose Image'; return }
+  if (file.size > 10 * 1024 * 1024) { showToast('Image larger than 10 MB.', 'warning'); input.value = ''; return }
+  try {
+    pendingCategoryImage = await readFileAsDataUrl(file)
+    label.textContent = `✓ ${file.name}`
+  } catch {
+    showToast('Could not read image.', 'error')
+  }
+})
+
+document.getElementById('menu-add-cat-btn')!.addEventListener('click', async () => {
+  const input = document.getElementById('menu-cat-name') as HTMLInputElement
+  const name = input.value.trim()
+  if (!name) { showToast('Enter a category name.', 'warning'); return }
+  const btn = document.getElementById('menu-add-cat-btn') as HTMLButtonElement
+  btn.disabled = true
+  try {
+    await api().createMenuCategory({ name, image: pendingCategoryImage || undefined })
+    input.value = ''
+    pendingCategoryImage = null
+    ;(document.getElementById('menu-cat-image') as HTMLInputElement).value = ''
+    document.getElementById('menu-cat-image-label')!.textContent = 'Choose Image'
+    showToast(`Category "${name}" added.`, 'success')
+    await loadMenuTree()
+  } catch (err: any) {
+    showToast(err.message || 'Failed to add category.', 'error')
+  } finally {
+    btn.disabled = false
+  }
+})
+
+document.getElementById('mi-save-btn')!.addEventListener('click', async () => {
+  const errEl = document.getElementById('mi-error')!
+  const statusEl = document.getElementById('mi-status')!
+  errEl.style.display = 'none'
+  const payload = collectItemPayload()
+
+  if (!payload.name) { errEl.textContent = 'Item name is required.'; errEl.style.display = 'block'; return }
+  if (!payload.category_id) { errEl.textContent = 'Pick a category (add one first).'; errEl.style.display = 'block'; return }
+  if (!payload.variants.length) { errEl.textContent = 'Add at least one variant with a price.'; errEl.style.display = 'block'; return }
+  if (!payload.tags.length) { errEl.textContent = 'Select a dietary tag (veg/non-veg/egg).'; errEl.style.display = 'block'; return }
+
+  const btn = document.getElementById('mi-save-btn') as HTMLButtonElement
+  btn.disabled = true
+  btn.textContent = 'Saving…'
+  statusEl.textContent = ''
+  try {
+    const result = await api().createMenuItem(payload)
+    showToast(`"${result.name}" added to the menu.`, 'success')
+    resetItemForm()
+    await loadMenuTree()
+  } catch (err: any) {
+    errEl.textContent = err.message || 'Failed to save item.'
+    errEl.style.display = 'block'
+    showToast(err.message || 'Failed to save item.', 'error')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Save Item'
+  }
+})
 
 // ─── Live KOT listener ───────────────────────────────────────────────
 try {
