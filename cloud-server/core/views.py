@@ -448,8 +448,21 @@ class AuthLoginView(View):
 
         return JsonResponse({
             'session_token': f'tok_{session_token}',
+            # Layer-2 staff "shift" JWT for offline use against Electron devices.
+            # Absent only if the user has no restaurant (e.g. a superuser).
+            **_staff_token_block(authenticated_user),
             **serialize_user_context(authenticated_user),
         })
+
+
+def _staff_token_block(user) -> dict:
+    """Best-effort staff JWT block for the login/refresh responses."""
+    from core.services.staff_token_service import StaffTokenError, mint_staff_token
+
+    try:
+        return mint_staff_token(user)
+    except StaffTokenError:
+        return {}
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -485,6 +498,48 @@ class AuthLogoutView(View):
                 pass
         logout(request)
         return JsonResponse({'ok': True})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AuthStaffTokenView(View):
+    """POST /api/v1/auth/staff-token/ — mint a fresh staff shift JWT.
+
+    Used by the mobile client to silently refresh an expired/expiring token when
+    internet is available, without re-entering the password. Authenticated by
+    the existing manager/staff session Bearer token (tok_…)."""
+
+    def post(self, request):
+        user = get_session_user(request)
+        if user is None:
+            return JsonResponse({'error': 'Invalid or expired session'}, status=401)
+
+        from core.services.staff_token_service import StaffTokenError, mint_staff_token
+
+        try:
+            return JsonResponse(mint_staff_token(user))
+        except StaffTokenError as exc:
+            return JsonResponse({'error': str(exc)}, status=400)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SyncAuthMaterialView(View):
+    """GET /api/v1/sync/auth-material/ — a provisioned node fetches the shared
+    staff-token verification material for its restaurant.
+
+    Authenticated by the node's own Api-Key. Lets an already-paired device pick
+    up the secret (or a rotated one) without re-running the Setup Wizard."""
+
+    def get(self, request):
+        node, err = get_auth(request)
+        if err:
+            return err
+        restaurant = node.location.restaurant
+        if not restaurant.jwt_signing_secret:
+            restaurant.rotate_jwt_secret()
+        return JsonResponse({
+            'restaurant_id': str(restaurant.id),
+            'jwt_secret': restaurant.jwt_signing_secret,
+        })
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -563,6 +618,10 @@ class AuthReconnectNodeView(View):
         node.is_online = True
         node.save(update_fields=['api_key_hash', 'is_online', 'updated_at'])
 
+        restaurant = node.location.restaurant
+        if not restaurant.jwt_signing_secret:
+            restaurant.rotate_jwt_secret()
+
         return JsonResponse({
             'node_id': node.node_id,
             'api_key': f'sk_live_{raw_key}',
@@ -572,6 +631,9 @@ class AuthReconnectNodeView(View):
                 'id': str(node.location.id),
                 'name': node.location.name,
             },
+            # Device auth material (Layer 1 → enables Layer 2 offline verification).
+            'restaurant_id': str(restaurant.id),
+            'jwt_secret': restaurant.jwt_signing_secret,
         })
 
 

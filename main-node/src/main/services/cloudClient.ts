@@ -288,7 +288,18 @@ export const cloudClient = {
       node_name: string
       cluster_role: string
       location: { id: string; name: string }
+      restaurant_id?: string
+      jwt_secret?: string
     }>
+  },
+
+  // Fetch the restaurant's staff-token verification material with the node's
+  // own Api-Key. Used on boot to back-fill the secret for devices provisioned
+  // before this feature, and to pick up a rotated secret.
+  async fetchAuthMaterial() {
+    const res = await cloudFetch('/api/v1/sync/auth-material/')
+    if (!res.ok) throw new Error(`fetchAuthMaterial failed: ${res.status}`)
+    return res.json() as Promise<{ restaurant_id: string; jwt_secret: string }>
   },
 
   // Fetch the full node inventory from Cloud using the node's own Api-Key

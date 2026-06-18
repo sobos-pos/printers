@@ -15,6 +15,7 @@ from core.views import (
     SyncNodesView,
     SyncNodesCreateView,
     SyncPrintRoutesView,
+    SyncAuthMaterialView,
 )
 
 urlpatterns = [
@@ -32,4 +33,5 @@ urlpatterns = [
     path('nodes/', SyncNodesView.as_view()),
     path('nodes/create/', SyncNodesCreateView.as_view()),
     path('print-routes/', SyncPrintRoutesView.as_view()),
+    path('auth-material/', SyncAuthMaterialView.as_view()),
 ]

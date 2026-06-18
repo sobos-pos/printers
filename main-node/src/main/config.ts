@@ -10,6 +10,9 @@ export const config = {
   get nodeId() { return nodeConfigRepository.get('node_id') || 'node-A' },
   get locationId() { return nodeConfigRepository.get('location_id') || '' },
   get cloudApiKey() { return nodeConfigRepository.get('cloud_api_key') || '' },
+  // Device auth material (Layer 1) — used to verify staff JWTs offline (Layer 2).
+  get restaurantId() { return nodeConfigRepository.get('restaurant_id') || '' },
+  get jwtSecret() { return nodeConfigRepository.get('jwt_secret') || '' },
   get cloudBaseUrl() { return (process.env.CLOUD_BASE_URL || nodeConfigRepository.get('cloud_base_url') || 'http://localhost:8000').replace(/\/$/, '') },
 
   get localApiHost() { return nodeConfigRepository.get('local_api_host') || '0.0.0.0' },

@@ -3,10 +3,17 @@ import { menuCacheRepository } from '../../repositories/menuCacheRepository'
 import { config } from '../../config'
 import { menuSyncService } from '../../services/menuSyncService'
 import { orderService } from '../../services/orderService'
+import { requireStaffAuth } from '../middleware/auth'
 import type { CreateOrderInput } from '../../types'
 
+// Roles permitted to place orders from a staff device.
+const ORDER_ROLES = ['owner', 'manager', 'staff', 'waiter', 'kiosk'] as const
+
 export function registerOrderRoutes(app: FastifyInstance): void {
-  app.post<{ Body: CreateOrderInput }>('/api/v1/orders/', async (req, reply) => {
+  app.post<{ Body: CreateOrderInput }>(
+    '/api/v1/orders/',
+    { preHandler: requireStaffAuth(ORDER_ROLES) },
+    async (req, reply) => {
     try {
       // Local orders are validated against the cached menu. If the cache is empty
       // (bootstrap pull failed / menu never synced), try a one-off self-healing

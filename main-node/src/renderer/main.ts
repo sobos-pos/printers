@@ -391,7 +391,16 @@ async function refreshKotLog(): Promise<void> {
 }
 
 // ─── Printers ────────────────────────────────────────────────────────
-let cachedOsPrinters: Array<{ name: string; isDefault: boolean }> = []
+
+interface OsPrinterInfo {
+  name: string
+  portName: string
+  portType: 'usb' | 'tcp' | 'com' | 'unknown'
+  isDefault: boolean
+  hardwareStatus: 'active' | 'inactive' | 'unknown'
+}
+
+let cachedOsPrinters: OsPrinterInfo[] = []
 
 function escapeHtml(s: string): string {
   return String(s).replace(/[&<>"]/g, (c) =>
@@ -399,10 +408,18 @@ function escapeHtml(s: string): string {
   )
 }
 
-function buildPrinterOptions(selectedName: string | null, osPrinters: Array<{ name: string; isDefault: boolean }>): string {
+/** Dropdown only offers printers confirmed active by hardware check. */
+function buildPrinterOptions(selectedName: string | null, osPrinters: OsPrinterInfo[]): string {
+  // Include 'active' (confirmed connected) and 'unknown' (virtual/software printers
+  // like OneNote or PDF writers that have no physical port to probe).
+  // Exclude only 'inactive' — physically disconnected hardware printers.
+  const activePrinters = osPrinters.filter((p) => p.hardwareStatus !== 'inactive')
+
   const names = new Set<string>()
-  for (const p of osPrinters) names.add(p.name)
-  if (selectedName) names.add(selectedName)
+  for (const p of activePrinters) names.add(p.name)
+  // Do NOT inject selectedName when not in active printers — if the previously
+  // saved printer is disconnected the dropdown resets to "— Select printer —"
+  // so the user is prompted to reassign rather than silently keeping a dead printer.
 
   const sorted = [...names].sort((a, b) => a.localeCompare(b))
   const options = ['<option value="">— Select printer —</option>']
@@ -414,16 +431,32 @@ function buildPrinterOptions(selectedName: string | null, osPrinters: Array<{ na
   return options.join('')
 }
 
+function statusDot(hw: OsPrinterInfo['hardwareStatus']): string {
+  if (hw === 'active') return '🟢'
+  if (hw === 'inactive') return '🔴'
+  return '⚫'
+}
+
 async function refreshOsPrinters(): Promise<void> {
   try {
-    const list = await api().listOsPrinters()
+    const list = (await api().listOsPrinters()) as OsPrinterInfo[]
     cachedOsPrinters = list
     const el = document.getElementById('os-printers-list')!
     if (!list.length) {
       el.textContent = 'No OS printers found.'
       return
     }
-    el.textContent = list.map((p) => `${p.isDefault ? '★ ' : '  '}${p.name}`).join('\n')
+    el.textContent = list
+      .map((p) => {
+        const star = p.isDefault ? '★ ' : '  '
+        const dot = statusDot(p.hardwareStatus)
+        const label = p.hardwareStatus === 'active' ? 'Active'
+          : p.hardwareStatus === 'inactive' ? 'Inactive'
+          : 'Unknown'
+        const port = p.portType !== 'unknown' ? ` [${p.portName}]` : ''
+        return `${star}${dot} ${p.name}${port}  — ${label}`
+      })
+      .join('\n')
   } catch (err) {
     document.getElementById('os-printers-list')!.textContent = String(err)
   }
@@ -440,10 +473,12 @@ async function refreshPrinterPanel(): Promise<void> {
         scope: 'assigned' | 'leader_fallback'
         printer_name: string | null
       }>
-      os_printers?: Array<{ name: string; isDefault: boolean }>
+      os_printers?: OsPrinterInfo[]
     }
     const assignments = data.assignments ?? []
-    const osPrinters = data.os_printers?.length ? data.os_printers : await api().listOsPrinters()
+    const osPrinters: OsPrinterInfo[] = data.os_printers?.length
+      ? data.os_printers
+      : (await api().listOsPrinters()) as OsPrinterInfo[]
     cachedOsPrinters = osPrinters
 
     if (assignments.length === 0) {

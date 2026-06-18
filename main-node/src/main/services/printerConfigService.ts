@@ -3,7 +3,7 @@ import { config } from '../config'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
 import { printerRepository } from '../repositories/printerRepository'
 import { cloudClient } from './cloudClient'
-import { listOsPrintersAsync } from './printerDiscovery'
+import { listOsPrintersAsync, type OsPrinterInfo } from './printerDiscovery'
 import { nodeConfigService } from './nodeConfigService'
 
 export interface NodePrinterAssignment {
@@ -37,12 +37,12 @@ function isRouteForThisNode(
 export const printerConfigService = {
   async getAssignments(): Promise<{
     assignments: NodePrinterAssignment[]
-    os_printers: Array<{ name: string; isDefault: boolean }>
+    os_printers: OsPrinterInfo[]
   }> {
     const [{ routes }, localRoutes, osPrinters] = await Promise.all([
       cloudClient.fetchPrintRoutes(),
       Promise.resolve(printerRepository.getAllRoutes()),
-      listOsPrintersAsync(),
+      listOsPrintersAsync({ includeHardwareStatus: true }),
     ])
 
     const localPrinters = printerRepository.getAllPrinters()

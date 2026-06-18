@@ -39,6 +39,21 @@ async function bootstrapAsync(): Promise<void> {
     await nodeConfigService.restoreConfig().catch(() => false)
     upgradeMisconfiguredPrinterDrivers()
 
+    // Back-fill staff-token verification material (Layer 1) for devices
+    // provisioned before this feature, and pick up a rotated secret. Best-effort:
+    // if cloud is unreachable we keep whatever secret we already stored.
+    if (!config.jwtSecret || !config.restaurantId) {
+      const { cloudClient: authClient } = await import('./services/cloudClient')
+      await authClient
+        .fetchAuthMaterial()
+        .then((m) => {
+          nodeConfigRepository.set('restaurant_id', m.restaurant_id)
+          nodeConfigRepository.set('jwt_secret', m.jwt_secret)
+          console.log('[Boot] Fetched staff-auth material')
+        })
+        .catch((err) => console.warn('[Boot] Auth material fetch failed:', err))
+    }
+
     if (config.clusterRole === 'leader') {
       await menuSyncService.bootstrapMenuFromCloud().catch((err) => {
         console.warn('[Boot] Menu bootstrap failed:', err)
@@ -228,6 +243,9 @@ function registerIpc(): void {
     nodeConfigRepository.set('node_label', data.node_name)
     nodeConfigRepository.set('manager_email', managerEmail || '')
     nodeConfigRepository.set('lan_host', lanHost)
+    // Device auth material for verifying staff JWTs offline (Layer 1 → Layer 2).
+    if (data.restaurant_id) nodeConfigRepository.set('restaurant_id', data.restaurant_id)
+    if (data.jwt_secret) nodeConfigRepository.set('jwt_secret', data.jwt_secret)
 
     workerManager.startWorkers(data.cluster_role as 'leader' | 'follower')
     return data
@@ -388,6 +406,9 @@ function registerIpc(): void {
     nodeConfigRepository.delete('leader_port')
     nodeConfigRepository.delete('leader_status')
     nodeConfigRepository.delete('manager_email')
+    // Decommission must not leave the staff-token secret on the device.
+    nodeConfigRepository.delete('restaurant_id')
+    nodeConfigRepository.delete('jwt_secret')
 
     workerManager.stopAllWorkers()
     return { ok: true }
@@ -421,7 +442,7 @@ function registerIpc(): void {
 
   ipcMain.handle('list-os-printers', async () => {
     const { listOsPrintersAsync } = await import('./services/printerDiscovery')
-    return listOsPrintersAsync()
+    return listOsPrintersAsync({ includeHardwareStatus: true })
   })
 
   ipcMain.handle('test-print', async (_e, printerName?: string) => {

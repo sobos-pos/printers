@@ -9,6 +9,7 @@ from core.views import (
     AuthMeView,
     AuthLogoutView,
     AuthReconnectNodeView,
+    AuthStaffTokenView,
 )
 
 urlpatterns = [
@@ -17,6 +18,7 @@ urlpatterns = [
     path('api/v1/auth/login/', AuthLoginView.as_view()),
     path('api/v1/auth/me/', AuthMeView.as_view()),
     path('api/v1/auth/logout/', AuthLogoutView.as_view()),
+    path('api/v1/auth/staff-token/', AuthStaffTokenView.as_view()),
     path('api/v1/auth/reconnect-node/', AuthReconnectNodeView.as_view()),
     path('api/v1/', include('tables.urls')),
     path('api/v1/', include('orders.urls')),
