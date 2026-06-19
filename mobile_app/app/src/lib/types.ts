@@ -47,6 +47,7 @@ export interface TableSummary {
   id: string
   label: string
   location: string
+  section?: { code: string; name: string }
 }
 
 export interface Station {
@@ -84,9 +85,11 @@ export interface MenuItem {
   id: string
   name: string
   description: string
-  base_price: string // decimal string
+  base_price: string // decimal string (may be section-overridden)
   is_available: boolean
   image: string | null
+  /** Resolved kitchen routing key. Used by the node for KOT grouping; informational only for the app. */
+  kitchen_code?: string | null
   station: Station | null
   dietary_tags: DietaryTag[]
   variants: Variant[]
@@ -101,7 +104,12 @@ export interface MenuCategory {
 }
 
 export interface MenuResponse {
-  table: { id: string; label: string }
+  table: {
+    id: string
+    label: string
+    /** Section this table belongs to — present when the location has sections configured. */
+    section?: { code: string; name: string }
+  }
   menu_version: number
   categories: MenuCategory[]
 }

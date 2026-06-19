@@ -12,6 +12,8 @@ export interface OrderRow {
   id: string
   location_id: string
   table_uuid: string | null
+  /** Section code for BILL routing. Defaults to 'COUNTER' for takeaway/unassigned. */
+  section_code: string
   source: string
   status: OrderStatus
   total: number
@@ -70,6 +72,8 @@ export interface KotPrintPayload extends KotSegment {
   placed_at?: string
   /** 'KOT' (kitchen ticket) or 'BILL' (priced receipt). Drives formatting. */
   job_type?: string
+  /** Pre-computed order total for BILL receipts. More reliable than summing lines. */
+  total?: number
 }
 
 export type PaperWidth = '58mm' | '80mm'
@@ -78,6 +82,8 @@ export interface KotPayload {
   order: string
   table: string | null
   placed_at: string
+  /** Section code for BILL routing — resolved from table.section or 'COUNTER'. */
+  section_code: string
   segments: KotSegment[]
 }
 
@@ -126,8 +132,12 @@ export interface MenuItemPayload {
   kind?: string
   subcategory_id?: string | null
   is_available: boolean
-  // Convenience "from" price = cheapest available variant.
+  // Convenience "from" price = cheapest available variant (may be section-overridden).
   base_price: string
+  /** Resolved kitchen routing key: item.kitchen ?? category.kitchen ?? null.
+   *  Node uses this to group items into KOT segments; falls back to 'KITCHEN'. */
+  kitchen_code?: string | null
+  // Kept for backward compatibility; KOT routing now uses kitchen_code.
   station?: { code: string; name: string } | null
   preparation_time?: string | null
   serving_info?: string | null
@@ -142,7 +152,12 @@ export interface MenuItemPayload {
 }
 
 export interface MenuCachePayload {
-  table?: { id: string; label: string }
+  table?: {
+    id: string
+    label: string
+    /** Section this table belongs to — populated by get_menu_for_table. */
+    section?: { code: string; name: string }
+  }
   menu_version?: number
   version?: number
   categories: Array<{
@@ -151,6 +166,8 @@ export interface MenuCachePayload {
     description?: string
     display_order: number
     image?: string | null
+    /** Default kitchen code for items in this category. */
+    kitchen_code?: string | null
     subcategories?: Array<{ id: string; name: string; display_order: number }>
     items: MenuItemPayload[]
   }>

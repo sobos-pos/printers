@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import transaction
 from django.db.models import Prefetch
 
@@ -17,9 +19,7 @@ class MenuService:
         .order_by('display_order'),
     )
 
-    # Top-level modifier groups (menu_item set) and their in-stock options.
-    # Nested groups are prefetched a few levels deep; the recursive serializer
-    # handles any remaining depth lazily.
+    # Top-level modifier groups and their in-stock options (prefetched 3 levels deep).
     _MODIFIER_PREFETCH = Prefetch(
         'modifier_groups__options',
         queryset=Modifier.objects.filter(in_stock=True)
@@ -32,7 +32,7 @@ class MenuService:
     _ITEM_PREFETCH = Prefetch(
         'items',
         queryset=MenuItem.objects.filter(is_available=True)
-        .select_related('station', 'preparation_time', 'serving_info', 'subcategory')
+        .select_related('kitchen', 'station', 'preparation_time', 'serving_info', 'subcategory')
         .prefetch_related(
             _VARIANT_PREFETCH,
             _MODIFIER_PREFETCH,
@@ -45,37 +45,83 @@ class MenuService:
 
     @staticmethod
     def get_menu_for_table(table_uuid: str) -> dict:
-        """Resolve table -> location -> build the full rich menu payload."""
-        table = Table.objects.select_related('location').get(
+        """Resolve table → section → location → build section-filtered menu payload."""
+        table = Table.objects.select_related('location', 'section').get(
             id=table_uuid, is_active=True
         )
         location = table.location
+        section = table.section
         menu_version, _ = MenuVersion.objects.get_or_create(location=location)
+
+        # Resolve section-scoped visibility and price overrides.
+        price_overrides: dict[str, Decimal] = {}   # item_id (str) → price override
+        visible_item_ids: set[str] | None = None    # None = everything is visible
+
+        if section is not None:
+            section_menus = list(
+                section.section_menus
+                .select_related('menu')
+                .prefetch_related('menu__listings__item')
+            )
+            if section_menus:
+                # Section has explicit menus → only listed items are visible.
+                visible_item_ids = set()
+                for sm in section_menus:
+                    for listing in sm.menu.listings.all():
+                        item_id_str = str(listing.item_id)
+                        visible_item_ids.add(item_id_str)
+                        if listing.price_override is not None:
+                            price_overrides[item_id_str] = listing.price_override
 
         categories = (
             MenuCategory.objects.filter(location=location, is_active=True)
+            .select_related('kitchen')
             .prefetch_related('subcategories', MenuService._ITEM_PREFETCH)
             .order_by('display_order')
         )
 
+        table_info: dict = {'id': str(table.id), 'label': table.label}
+        if section is not None:
+            table_info['section'] = {'code': section.code, 'name': section.name}
+
         return {
-            'table': {'id': str(table.id), 'label': table.label},
+            'table': table_info,
             'menu_version': menu_version.version,
-            'categories': MenuService._serialize_categories(categories),
+            'categories': MenuService._serialize_categories(
+                categories, visible_item_ids, price_overrides
+            ),
         }
 
     # -- serialization ------------------------------------------------------
 
     @staticmethod
-    def _serialize_categories(categories):
+    def _serialize_categories(
+        categories,
+        visible_item_ids: set[str] | None = None,
+        price_overrides: dict[str, Decimal] | None = None,
+    ) -> list:
+        price_overrides = price_overrides or {}
         result = []
         for cat in categories:
+            category_kitchen_code = cat.kitchen.code if cat.kitchen_id else None
+            all_items = cat.items.all()
+
+            if visible_item_ids is not None:
+                all_items = [i for i in all_items if str(i.id) in visible_item_ids]
+            else:
+                all_items = list(all_items)
+
+            # Skip empty categories when section filtering is active.
+            if visible_item_ids is not None and not all_items:
+                continue
+
             result.append({
                 'id': str(cat.id),
                 'name': cat.name,
                 'description': cat.description,
                 'display_order': cat.display_order,
                 'image': cat.image.url if cat.image else None,
+                'kitchen_code': category_kitchen_code,
                 'subcategories': [
                     {
                         'id': str(sub.id),
@@ -85,16 +131,35 @@ class MenuService:
                     for sub in cat.subcategories.all()
                     if sub.is_active
                 ],
-                'items': [MenuService._serialize_item(item) for item in cat.items.all()],
+                'items': [
+                    MenuService._serialize_item(
+                        item,
+                        category_kitchen_code=category_kitchen_code,
+                        price_override=price_overrides.get(str(item.id)),
+                    )
+                    for item in all_items
+                ],
             })
         return result
 
     @staticmethod
-    def _serialize_item(item) -> dict:
+    def _serialize_item(
+        item,
+        category_kitchen_code: str | None = None,
+        price_override: Decimal | None = None,
+    ) -> dict:
+        # Resolved kitchen: item > category > None (node falls back to 'KITCHEN')
+        kitchen_code = (
+            item.kitchen.code if item.kitchen_id else category_kitchen_code
+        )
+
         variants = list(item.variants.all())
-        # base_price = cheapest available variant; convenience for clients that
-        # display a "from" price or do not force variant selection.
-        base_price = str(min((v.price for v in variants), default=0))
+        # base_price: use section price_override when set; else cheapest variant.
+        if price_override is not None:
+            base_price = str(price_override)
+        else:
+            base_price = str(min((v.price for v in variants), default=0))
+
         return {
             'id': str(item.id),
             'name': item.name,
@@ -103,6 +168,8 @@ class MenuService:
             'subcategory_id': str(item.subcategory_id) if item.subcategory_id else None,
             'is_available': item.is_available,
             'base_price': base_price,
+            'kitchen_code': kitchen_code,
+            # Keep station for backward compatibility with older nodes/clients.
             'station': {'code': item.station.code, 'name': item.station.name}
             if item.station
             else None,
@@ -174,18 +241,10 @@ class MenuService:
 
     @staticmethod
     def get_menu_snapshot(location, since_version: int) -> dict | None:
-        """Return a menu snapshot for the caller.
+        """Return a full-location menu snapshot for node sync.
 
-        A node bootstraps with since_version=0 because it has no cached menu
-        yet. A freshly-seeded location also starts at MenuVersion.version == 0,
-        so the old "version <= since_version" gate (0 <= 0) meant a brand-new
-        node could never receive the menu and its local order validation would
-        permanently fail with "Menu item not found".
-
-        Fix: only treat the request as "no changes" when the caller already holds
-        a real version (since_version > 0) that is not older than ours. When
-        since_version == 0 we always return the full current menu so a node can
-        bootstrap regardless of the location's version number.
+        since_version=0 forces a full pull so a fresh node can bootstrap even
+        when the location's menu version is also 0.
         """
         menu_version, _ = MenuVersion.objects.get_or_create(location=location)
         if since_version > 0 and menu_version.version <= since_version:
@@ -193,6 +252,7 @@ class MenuService:
 
         categories = (
             MenuCategory.objects.filter(location=location, is_active=True)
+            .select_related('kitchen')
             .prefetch_related('subcategories', MenuService._ITEM_PREFETCH)
             .order_by('display_order')
         )

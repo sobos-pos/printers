@@ -2,7 +2,7 @@ import { config } from '../config'
 import { printJobRepository } from '../repositories/printJobRepository'
 import { printerRepository } from '../repositories/printerRepository'
 import { printRouteRepository } from '../repositories/printRouteRepository'
-import type { KotPrintPayload, KotSegment, PaperWidth } from '../types'
+import type { KotPrintPayload, KotSegment, LocalOrder, PaperWidth } from '../types'
 import { resolvePrinterDriver } from './printerDriver'
 import { recordPrintedKot } from './kotLogService'
 
@@ -69,6 +69,46 @@ export const printService = {
       })
       console.log(`[Print] Enqueued ${jobType} for ${segment.station} → ${printerId ?? 'unrouted'}`)
     }
+  },
+
+  /** Enqueue ONE consolidated BILL for the entire order, routed by section code.
+   *
+   *  All order lines appear on a single receipt so the customer (and accounts)
+   *  see one bill regardless of how many kitchens were involved.
+   */
+  enqueueBill(
+    orderId: string,
+    order: LocalOrder,
+    sectionCode: string,
+    meta?: { table?: string | null; placedAt?: string; total?: number },
+  ): void {
+    const billLines = order.items.map((item) => ({
+      qty: item.quantity,
+      name: item.name_snapshot,
+      mods: item.modifiers.map((m) => m.name_snapshot),
+      notes: item.notes,
+      unit_price: Number(item.unit_price) || 0,
+    }))
+
+    const payload: KotPrintPayload = {
+      station: sectionCode,
+      lines: billLines,
+      order_id: orderId,
+      table: meta?.table ?? null,
+      placed_at: meta?.placedAt,
+      job_type: 'BILL',
+      total: meta?.total ?? order.total,
+    }
+
+    const printerId = this.resolvePrinterId(sectionCode, 'BILL')
+    printJobRepository.enqueue({
+      order_id: orderId,
+      station: sectionCode,
+      job_type: 'BILL',
+      printer_id: printerId,
+      payload: JSON.stringify(payload),
+    })
+    console.log(`[Print] Enqueued BILL for section ${sectionCode} → ${printerId ?? 'unrouted'}`)
   },
 
   async processDueJobs(): Promise<void> {

@@ -67,8 +67,7 @@ function formatKotTicket(printer: ThermalPrinter, payload: KotPrintPayload): voi
   printer.drawLine()
 
   printer.alignLeft()
-  printer.leftRight(`Station: ${payload.station}`, `Time: ${formatTime(payload.placed_at)}`)
-  printer.println(`Type: ${(payload.job_type ?? 'KOT').toUpperCase()}`)
+  printer.leftRight(`Kitchen: ${payload.station}`, `Time: ${formatTime(payload.placed_at)}`)
   if (payload.table) printer.println(`Table: ${payload.table}`)
   if (payload.order_id) printer.println(`Order: ${payload.order_id.slice(0, 8)}`)
   printer.drawLine('-')
@@ -90,26 +89,28 @@ function formatBillReceipt(printer: ThermalPrinter, payload: KotPrintPayload): v
   printer.bold(true)
   printer.println('BILL')
   printer.bold(false)
-  printer.println(`${payload.station} station`)
+  if (payload.table) printer.println(`Table: ${payload.table}`)
   printer.drawLine()
 
   printer.alignLeft()
   printer.leftRight(`Time: ${formatTime(payload.placed_at)}`, '')
-  printer.println(`Type: ${(payload.job_type ?? 'BILL').toUpperCase()}`)
-  if (payload.table) printer.println(`Table: ${payload.table}`)
   if (payload.order_id) printer.println(`Order: ${payload.order_id.slice(0, 8)}`)
   printer.drawLine('-')
 
-  let total = 0
   for (const line of payload.lines) {
     const amount = line.qty * (line.unit_price ?? 0)
-    total += amount
     printer.leftRight(`${line.qty}x ${line.name}`, money(amount))
     if (line.mods.length) printer.println(`   + ${line.mods.join(', ')}`)
+    if (line.notes) printer.println(`   * ${line.notes}`)
   }
 
   printer.drawLine('-')
   printer.bold(true)
+  // Use the pre-computed order total when available (accurate; includes modifiers
+  // and any rounding). Fall back to summing lines for legacy payloads.
+  const total =
+    payload.total ??
+    payload.lines.reduce((sum, l) => sum + l.qty * (l.unit_price ?? 0), 0)
   printer.leftRight('TOTAL', money(total))
   printer.bold(false)
   printer.drawLine()
@@ -140,9 +141,10 @@ export function formatTestKotEscPos(station = 'KITCHEN', paperWidth: PaperWidth 
       table: 'T99',
       placed_at: new Date().toISOString(),
       lines: [
-        { qty: 1, name: 'Margherita Pizza', mods: ['Extra Cheese'], notes: 'Well done' },
-        { qty: 2, name: 'Lime Soda', mods: [], notes: '' },
+        { qty: 1, name: 'Margherita Pizza', mods: ['Extra Cheese'], notes: 'Well done', unit_price: 280 },
+        { qty: 2, name: 'Lime Soda', mods: [], notes: '', unit_price: 60 },
       ],
+      total: 400,
     },
     paperWidth,
   )

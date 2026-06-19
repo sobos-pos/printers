@@ -56,8 +56,8 @@ export const orderRepository = {
 
     const result = db
       .prepare(
-        `${verb} INTO orders (id, location_id, table_uuid, source, status, total, origin, push_state, pushed_at, created_at, updated_at)
-         VALUES (@id, @location_id, @table_uuid, @source, @status, @total, @origin, @push_state, @pushed_at, @created_at, @updated_at)`,
+        `${verb} INTO orders (id, location_id, table_uuid, section_code, source, status, total, origin, push_state, pushed_at, created_at, updated_at)
+         VALUES (@id, @location_id, @table_uuid, @section_code, @source, @status, @total, @origin, @push_state, @pushed_at, @created_at, @updated_at)`,
       )
       .run({ ...order, created_at: now, updated_at: now })
 

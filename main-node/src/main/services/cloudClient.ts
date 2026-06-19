@@ -431,4 +431,18 @@ export const cloudClient = {
     if (!res.ok) throw new Error((data as any).error || `deleteMenuMedia failed: ${res.status}`)
     return data as { deleted: boolean }
   },
+
+  async fetchTables() {
+    const params = new URLSearchParams({ location: config.locationId })
+    const res = await cloudFetch(`/api/v1/tables/?${params}`)
+    if (!res.ok) throw new Error(`fetchTables failed: ${res.status}`)
+    return res.json() as Promise<{
+      tables: Array<{
+        id: string
+        label: string
+        location: string
+        section?: { code: string; name: string }
+      }>
+    }>
+  },
 }

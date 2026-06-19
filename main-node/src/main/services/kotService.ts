@@ -8,12 +8,13 @@ export const kotService = {
     const menu = menuCacheRepository.get(config.locationId)
 
     for (const item of order.items) {
-      let station = 'KITCHEN'
+      // Resolution rule: item.kitchen_code ?? category.kitchen_code ?? 'KITCHEN'
+      let kitchenCode = 'KITCHEN'
       if (menu) {
         for (const cat of menu.payload.categories ?? []) {
           const mi = cat.items?.find((i) => i.id === item.menu_item_id)
-          if (mi?.station?.code) {
-            station = mi.station.code
+          if (mi) {
+            kitchenCode = mi.kitchen_code ?? cat.kitchen_code ?? 'KITCHEN'
             break
           }
         }
@@ -24,11 +25,14 @@ export const kotService = {
         for (const cat of menu.payload.categories ?? []) {
           const mi = cat.items?.find((i) => i.id === item.menu_item_id)
           const variant = mi?.variants?.find((v) => v.id === item.variant_id)
-          if (variant) name = `${name} (${variant.name})`
+          if (variant) {
+            name = `${name} (${variant.name})`
+            break
+          }
         }
       }
 
-      const lines = segmentsMap.get(station) ?? []
+      const lines = segmentsMap.get(kitchenCode) ?? []
       lines.push({
         qty: item.quantity,
         name,
@@ -36,12 +40,11 @@ export const kotService = {
         notes: item.notes,
         unit_price: Number(item.unit_price) || 0,
       })
-      segmentsMap.set(station, lines)
+      segmentsMap.set(kitchenCode, lines)
     }
 
     let tableLabel: string | null = null
-    if (order.table_uuid && menu?.payload.categories) {
-      // table label from cached menu if present at root
+    if (order.table_uuid && menu?.payload) {
       const root = menu.payload as { table?: { label: string } }
       tableLabel = root.table?.label ?? order.table_uuid.slice(0, 8)
     }
@@ -50,6 +53,7 @@ export const kotService = {
       order: order.id,
       table: tableLabel,
       placed_at: order.created_at,
+      section_code: order.section_code ?? 'COUNTER',
       segments: [...segmentsMap.entries()].map(([station, lines]) => ({ station, lines })),
     }
   },

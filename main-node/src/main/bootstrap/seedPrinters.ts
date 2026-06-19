@@ -41,6 +41,8 @@ export function configurePrinterFromEnv(): void {
     ['KITCHEN', 'KOT'],
     ['BAR', 'KOT'],
     ['KITCHEN', 'BILL'],
+    ['COUNTER', 'BILL'],
+    ['DEFAULT', 'BILL'],
   ] as const) {
     db.prepare(
       `INSERT INTO print_routes (station, job_type, printer_id, fallback_printer_id) VALUES (?, ?, ?, NULL)
@@ -61,6 +63,8 @@ function dbSeedSimulated(): void {
     ['KITCHEN', 'KOT'],
     ['BAR', 'KOT'],
     ['KITCHEN', 'BILL'],
+    ['COUNTER', 'BILL'],
+    ['DEFAULT', 'BILL'],
   ] as const) {
     db.prepare(
       `INSERT OR IGNORE INTO print_routes (station, job_type, printer_id, fallback_printer_id) VALUES (?, ?, ?, NULL)`,

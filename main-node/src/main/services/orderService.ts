@@ -18,8 +18,7 @@ import type {
 } from '../types'
 
 /** Depth-first search for a modifier option by id, descending into nested
- * option groups so deeply-nested selections (e.g. sugar level on an add-on
- * beverage) are still resolved and priced. */
+ * option groups so deeply-nested selections are still resolved and priced. */
 function findOption(
   groups: MenuModifierGroup[] | undefined,
   optionId: string,
@@ -68,8 +67,6 @@ function buildLineItems(items: BulkOrderItem[]) {
     const found = menuService.findMenuItem(itemData.menu_item)
     if (!found) throw new Error(`Menu item not found: ${itemData.menu_item}`)
 
-    // Variants carry the absolute price. A chosen variant sets the unit price
-    // outright; otherwise fall back to base_price (cheapest available variant).
     let unitPrice = parseFloat(found.item.base_price)
     let variantName: string | null = null
     if (itemData.variant) {
@@ -124,12 +121,16 @@ export const orderService = {
       0,
     )
 
+    // Resolve section for BILL routing before inserting the order.
+    const sectionCode = menuService.resolveSectionCode(input.table_uuid ?? null)
+
     const orderId = orderRepository.newId()
     orderRepository.insertOrder(
       {
         id: orderId,
         location_id: config.locationId,
         table_uuid: input.table_uuid,
+        section_code: sectionCode,
         source: input.source ?? 'Staff_POS',
         status: 'Pending',
         total,
@@ -144,23 +145,24 @@ export const orderService = {
     kdsService.broadcastNewOrder(serializeOrder(order))
 
     const kot = kotService.buildKot(order)
-    // Each station segment produces a KOT (kitchen ticket) and a BILL (priced
-    // receipt). Both are routed independently by (station, type) so an offline
-    // follower's BILL and KOT both fall back to the leader.
+
+    // N kitchens → N KOTs (one per kitchen code).
     printService.enqueueSegments(orderId, kot.segments, 'KOT', {
       table: kot.table,
       placedAt: kot.placed_at,
     })
-    printService.enqueueSegments(orderId, kot.segments, 'BILL', {
+
+    // 1 BILL per order, routed by section code — never per kitchen segment.
+    printService.enqueueBill(orderId, order, sectionCode, {
       table: kot.table,
       placedAt: kot.placed_at,
+      total,
     })
 
     orderRepository.updateStatus(orderId, 'Confirmed')
     const confirmed = orderRepository.getById(orderId)!
     kdsService.broadcastStatusChange(orderId, 'Confirmed')
 
-    // Best-effort cloud status push
     cloudClient.pushStatus(orderId, 'Confirmed').catch(() => {
       console.warn(`[Order] Cloud status push deferred for ${orderId}`)
     })
@@ -201,11 +203,16 @@ export const orderService = {
       })),
     }))
 
+    // section_code comes from the cloud payload (set by order_service._serialize_order).
+    // Fall back to 'COUNTER' for legacy payloads that pre-date this field.
+    const sectionCode = payload.section_code ? String(payload.section_code) : 'COUNTER'
+
     const inserted = orderRepository.insertOrder(
       {
         id: orderId,
         location_id: config.locationId,
         table_uuid: payload.table_uuid ? String(payload.table_uuid) : null,
+        section_code: sectionCode,
         source: String(payload.source ?? 'User_App_QR'),
         status: String(payload.status ?? 'Pending') as OrderStatus,
         total: parseFloat(String(payload.total ?? 0)),
@@ -224,14 +231,20 @@ export const orderService = {
   processCloudOrder(order: LocalOrder): void {
     kdsService.broadcastNewOrder(serializeOrder(order))
     const kot = kotService.buildKot(order)
+
+    // N KOTs — one per kitchen.
     printService.enqueueSegments(order.id, kot.segments, 'KOT', {
       table: kot.table,
       placedAt: kot.placed_at,
     })
-    printService.enqueueSegments(order.id, kot.segments, 'BILL', {
+
+    // 1 BILL — routed by section code carried on the order row.
+    printService.enqueueBill(order.id, order, order.section_code ?? 'COUNTER', {
       table: kot.table,
       placedAt: kot.placed_at,
+      total: order.total,
     })
+
     if (order.status === 'Pending') {
       orderRepository.updateStatus(order.id, 'Confirmed')
       kdsService.broadcastStatusChange(order.id, 'Confirmed')

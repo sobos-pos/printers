@@ -238,10 +238,13 @@ class Tag(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 4. Operations: printer stations
+# 4. Operations: printer stations and kitchens
 # ---------------------------------------------------------------------------
 
 class PrinterStation(BaseModel):
+    """Physical print destination (maps to a node/printer via PrintRoute).
+    Kept for backward compatibility; KOT routing now uses Kitchen.code."""
+
     location = models.ForeignKey(
         'core.Location', on_delete=models.CASCADE, related_name='stations'
     )
@@ -257,6 +260,33 @@ class PrinterStation(BaseModel):
         return f'{self.code} @ {self.location}'
 
 
+class Kitchen(BaseModel):
+    """Where dishes are cooked. Drives KOT routing (kitchen.code → KOT printer).
+
+    Resolution rule per item: item.kitchen.code ?? category.kitchen.code ?? 'KITCHEN'
+    """
+
+    location = models.ForeignKey(
+        'core.Location', on_delete=models.CASCADE, related_name='kitchens'
+    )
+    name = models.CharField(max_length=40)
+    # Routing key used in PrintRoute rows with print_type=KOT.
+    code = models.CharField(max_length=20)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['location', 'code'], name='uniq_kitchen_code'),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.code = self.code.upper()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'{self.code} ({self.name}) @ {self.location}'
+
+
 # ---------------------------------------------------------------------------
 # 2. Menu structure (per location)
 # ---------------------------------------------------------------------------
@@ -268,6 +298,14 @@ class MenuCategory(BaseModel):
     name = models.CharField(max_length=80)
     description = models.TextField(blank=True)
     display_order = models.PositiveIntegerField(default=0)
+    # Default kitchen for every item in this category. Per-item kitchen overrides this.
+    kitchen = models.ForeignKey(
+        Kitchen,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='categories',
+    )
     # Prep time may be set at category level and inherited by items.
     preparation_time = models.ForeignKey(
         PreparationTime, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
@@ -331,6 +369,14 @@ class MenuItem(BaseModel):
         blank=True,
         on_delete=models.SET_NULL,
         related_name='menu_items',
+    )
+    # Per-item kitchen override. Falls back to category.kitchen when null.
+    kitchen = models.ForeignKey(
+        Kitchen,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='items',
     )
     preparation_time = models.ForeignKey(
         PreparationTime, null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
@@ -567,3 +613,75 @@ class ModerationRecord(BaseModel):
 
     def __str__(self):
         return f'{self.entity_type} [{self.status}] {self.entity_id}'
+
+
+# ---------------------------------------------------------------------------
+# 5. Section-scoped menus (visibility axis)
+# ---------------------------------------------------------------------------
+
+class Menu(BaseModel):
+    """A named catalogue/price-list that can be assigned to one or more sections.
+
+    Items join menus via MenuListing (M2M) with an optional per-menu price override,
+    so the same dish can be priced differently in Janatha Bar vs Premium Bar.
+    """
+
+    location = models.ForeignKey(
+        'core.Location', on_delete=models.CASCADE, related_name='menus'
+    )
+    name = models.CharField(max_length=80)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f'{self.name} @ {self.location}'
+
+
+class SectionMenu(BaseModel):
+    """Maps a Section to one or more Menus (many-to-many via this through table)."""
+
+    section = models.ForeignKey(
+        'tables.Section', on_delete=models.CASCADE, related_name='section_menus'
+    )
+    menu = models.ForeignKey(
+        Menu, on_delete=models.CASCADE, related_name='section_menus'
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['section', 'menu'], name='uniq_section_menu'),
+        ]
+
+    def clean(self):
+        # A menu with no listings produces a blank waiter screen — catch it early.
+        if self.menu_id and not self.menu.listings.exists():
+            raise ValidationError(
+                f'Menu "{self.menu.name}" has no items. '
+                'Add MenuListing rows before assigning it to a section.'
+            )
+
+    def __str__(self):
+        return f'{self.section.code} → {self.menu.name}'
+
+
+class MenuListing(BaseModel):
+    """Item membership in a Menu with an optional price override.
+
+    If price_override is null the item's cheapest variant price is shown as-is.
+    If set, it replaces the displayed price for that menu (single-price items
+    such as bar beverages that differ in cost between sections).
+    """
+
+    menu = models.ForeignKey(Menu, on_delete=models.CASCADE, related_name='listings')
+    item = models.ForeignKey(MenuItem, on_delete=models.CASCADE, related_name='listings')
+    price_override = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['menu', 'item'], name='uniq_menu_listing'),
+        ]
+
+    def __str__(self):
+        override = f' @ ₹{self.price_override}' if self.price_override is not None else ''
+        return f'{self.item.name} in {self.menu.name}{override}'

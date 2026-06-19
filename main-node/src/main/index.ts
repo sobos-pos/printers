@@ -64,6 +64,23 @@ async function bootstrapAsync(): Promise<void> {
       // immediately, without waiting for heartbeat peer discovery or a manager re-save.
       const { cloudClient } = await import('./services/cloudClient')
 
+      // Warm up table→section mapping so BILL routing works from order #1,
+      // without waiting for waiters to open each table's menu first.
+      try {
+        const { tables } = await cloudClient.fetchTables()
+        const { menuService } = await import('./services/menuService')
+        let warmed = 0
+        for (const t of tables) {
+          if (t.section) {
+            menuService.storeSectionForTable(t.id, t.section.code, t.section.name)
+            warmed++
+          }
+        }
+        console.log(`[Boot] Warmed ${warmed}/${tables.length} table→section mappings`)
+      } catch (err) {
+        console.warn('[Boot] Table section warmup failed:', err)
+      }
+
       await cloudClient
         .fetchNodesByApiKey()
         .then(({ nodes }) => {

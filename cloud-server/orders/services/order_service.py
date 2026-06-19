@@ -32,7 +32,7 @@ class OrderService:
             if existing:
                 return existing
 
-        table = Table.objects.select_related('location').get(id=table_uuid)
+        table = Table.objects.select_related('location', 'section').get(id=table_uuid)
         location = table.location
 
         if created_by and created_by.location:
@@ -69,7 +69,7 @@ class OrderService:
         menu_items = {
             str(m.id): m
             for m in MenuItem.objects.filter(id__in=menu_item_ids).select_related(
-                'station'
+                'kitchen', 'category__kitchen', 'station'
             )
         }
         variants = {
@@ -85,11 +85,9 @@ class OrderService:
             variant = None
 
             if item_data.get('variant'):
-                # Variants carry the absolute price (no item-level base price).
                 variant = variants[str(item_data['variant'])]
                 unit_price = variant.price
             else:
-                # No variant chosen — price from the cheapest available variant.
                 cheapest = (
                     menu_item.variants.filter(is_available=True)
                     .order_by('price')
@@ -134,8 +132,10 @@ class OrderService:
     @staticmethod
     def get_order(order_uuid: str) -> Order:
         return (
-            Order.objects.select_related('location', 'table', 'created_by')
+            Order.objects.select_related('location', 'table__section', 'created_by')
             .prefetch_related(
+                'items__menu_item__kitchen',
+                'items__menu_item__category__kitchen',
                 'items__menu_item__station',
                 'items__variant',
                 'items__modifiers__modifier',
@@ -145,15 +145,32 @@ class OrderService:
 
     @staticmethod
     def _serialize_order(order: Order) -> dict:
-        """Full order payload written into SyncOutbox so the Node has everything."""
+        """Full order payload written into SyncOutbox so the Node has everything.
+
+        Includes section_code (for BILL routing) and kitchen_code per item
+        (for KOT grouping), so the node does not need to re-derive them from
+        the menu cache.
+        """
+        section_code = 'COUNTER'
+        if order.table_id and order.table.section_id:
+            section_code = order.table.section.code
+
         items = []
         for item in order.items.all():
+            # Resolution rule: item.kitchen ?? category.kitchen ?? None
+            kitchen_code = None
+            if item.menu_item.kitchen_id:
+                kitchen_code = item.menu_item.kitchen.code
+            elif item.menu_item.category.kitchen_id:
+                kitchen_code = item.menu_item.category.kitchen.code
+
             items.append({
                 'id': str(item.id),
                 'menu_item_id': str(item.menu_item.id),
                 'menu_item_name': item.menu_item.name,
+                'kitchen_code': kitchen_code,
                 'station_code': item.menu_item.station.code
-                if item.menu_item.station
+                if item.menu_item.station_id
                 else None,
                 'variant_id': str(item.variant.id) if item.variant else None,
                 'variant_name': item.variant.name if item.variant else None,
@@ -173,6 +190,7 @@ class OrderService:
             'id': str(order.id),
             'table_uuid': str(order.table.id) if order.table else None,
             'table_label': order.table.label if order.table else None,
+            'section_code': section_code,
             'source': order.source,
             'status': order.status,
             'total': str(order.total),

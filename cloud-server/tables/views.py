@@ -35,6 +35,7 @@ class TableListView(View):
         try:
             tables = (
                 Table.objects.filter(location_id=location_id, is_active=True)
+                .select_related('section')
                 .order_by('label')
             )
         except (ValueError, ValidationError):
@@ -42,12 +43,14 @@ class TableListView(View):
                 {'error': {'code': 'BAD_REQUEST', 'message': 'Invalid location id'}},
                 status=400,
             )
-        return JsonResponse({
-            'tables': [
-                {'id': str(t.id), 'label': t.label, 'location': str(t.location_id)}
-                for t in tables
-            ]
-        })
+
+        def serialize_table(t):
+            row = {'id': str(t.id), 'label': t.label, 'location': str(t.location_id)}
+            if t.section_id:
+                row['section'] = {'code': t.section.code, 'name': t.section.name}
+            return row
+
+        return JsonResponse({'tables': [serialize_table(t) for t in tables]})
 
 
 class TableMenuView(View):
