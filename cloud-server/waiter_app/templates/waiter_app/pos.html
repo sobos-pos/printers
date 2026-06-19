@@ -24,7 +24,7 @@
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
     background: rgba(15, 18, 30, 0.4);
     backdrop-filter: blur(8px);
   }
@@ -470,20 +470,223 @@
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
+
+  /* ── Auth: Login Overlay ── */
+  .login-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(3, 4, 8, 0.92);
+    backdrop-filter: blur(16px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+  }
+  .login-card {
+    background: var(--surface-opaque);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 36px;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: var(--shadow-lg);
+  }
+  .login-title {
+    font-size: 22px;
+    font-weight: 800;
+    margin-bottom: 6px;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+  }
+  .login-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+  }
+  .login-card .form-group {
+    margin-bottom: 16px;
+  }
+  .login-card label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .login-card input {
+    width: 100%;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+  .login-card input:focus {
+    border-color: var(--brand-color);
+    outline: none;
+  }
+  .login-error {
+    color: var(--danger);
+    font-size: 13px;
+    margin-bottom: 12px;
+    display: none;
+  }
+
+  /* ── Profile Section ── */
+  .profile-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    margin-right: 12px;
+  }
+  .profile-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: var(--transition);
+    position: relative;
+  }
+  .profile-chip:hover {
+    border-color: var(--border-glow);
+  }
+  .profile-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--brand);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 800;
+    color: #fff;
+  }
+  .profile-name {
+    font-size: 12px;
+    font-weight: 700;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+  }
+  .profile-role {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .profile-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 240px;
+    background: var(--surface-opaque);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    overflow: hidden;
+  }
+  .profile-dropdown.open {
+    display: block;
+  }
+  .profile-dropdown-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .profile-dropdown-header .name {
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .profile-dropdown-header .meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+  .profile-dropdown-actions {
+    padding: 8px;
+  }
+  .profile-dropdown-actions button {
+    width: 100%;
+    padding: 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--danger);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .profile-dropdown-actions button:hover {
+    background: rgba(244, 63, 94, 0.1);
+  }
+  .pos-locked .menu-panel,
+  .pos-locked .order-panel {
+    filter: blur(4px);
+    pointer-events: none;
+    user-select: none;
+  }
 </style>
 {% endblock %}
 
 {% block body %}
+<!-- Login Overlay (shown until staff authenticates) -->
+<div id="login-overlay" class="login-overlay">
+  <div class="login-card">
+    <div class="login-title">Staff Sign In</div>
+    <div class="login-sub">Sign in to place orders and track your activity</div>
+    <div class="login-error" id="login-error"></div>
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label for="login-email">Username or Email</label>
+        <input type="text" id="login-email" required autocomplete="username" placeholder="your@email.com">
+      </div>
+      <div class="form-group">
+        <label for="login-password">Password</label>
+        <input type="password" id="login-password" required autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <button class="btn btn-primary" type="submit" style="width:100%; margin-top:8px;" id="login-btn">
+        Sign In to POS
+      </button>
+    </form>
+  </div>
+</div>
+
 <!-- Modal Mounting Point -->
 <div id="picker-modal" style="display:none"></div>
 
-<div class="pos-layout">
+<div class="pos-layout pos-locked" id="pos-layout">
 
   <!-- LEFT PANEL: Menu Catalog -->
   <div class="menu-panel">
     <div class="menu-panel-header">
       <div class="pos-title">Soboss POS</div>
-      <div style="display:flex; align-items:center; gap:8px;">
+      <div class="profile-section" id="profile-section" style="display:none;">
+        <div class="profile-chip" onclick="toggleProfileDropdown(event)">
+          <div class="profile-avatar" id="profile-avatar">?</div>
+          <div>
+            <div class="profile-name" id="profile-name">—</div>
+            <div class="profile-role" id="profile-role">—</div>
+          </div>
+          <div class="profile-dropdown" id="profile-dropdown">
+            <div class="profile-dropdown-header">
+              <div class="name" id="profile-full-name">—</div>
+              <div class="meta" id="profile-email">—</div>
+              <div class="meta" id="profile-branch">—</div>
+            </div>
+            <div class="profile-dropdown-actions">
+              <button type="button" onclick="handleLogout()">Sign Out</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; margin-left:auto;">
         <div class="mode-badge probing" id="mode-badge">
           <span class="pulse-dot-yellow" id="mode-dot"></span>
           <span id="mode-label" style="font-size:10px;">Probing…</span>
@@ -541,36 +744,182 @@
   // ── Injected Config ────────────────────────────────────────────────────────
   const TABLES_JSON   = {{ tables_json|safe }};
   const NODE_BASE_URL = '{{ node_base_url }}';
-  const CLOUD_BASE    = '{{ cloud_base_url }}'; // relative paths in dev ('')
+  const CLOUD_BASE    = '{{ cloud_base_url }}';
+  const AUTH_TOKEN_KEY = 'soboss_pos_session_token';
 
   // ── State ──────────────────────────────────────────────────────────────────
-  let baseUrl           = CLOUD_BASE; // current API base path
-  let mode              = 'cloud';    // 'local' | 'cloud'
+  let baseUrl           = CLOUD_BASE;
+  let mode              = 'cloud';
   let menuData          = null;
-  let cart              = [];         // [{ item, variant, modifiers, qty, unitPrice, lineNote }]
+  let cart              = [];
   let selectedTableUuid = null;
   let orderId           = null;
   let pollTimer         = null;
   let probeTimer        = null;
+  let sessionToken      = null;
+  let currentUser       = null;
 
-  // ── Boot ───────────────────────────────────────────────────────────────────
-  window.addEventListener('DOMContentLoaded', () => {
-    populateTables();
-    probe();
-    // Re-probe every 20 seconds to monitor local connection live
-    probeTimer = setInterval(probe, 20000);
+  // ── Auth Helpers ───────────────────────────────────────────────────────────
+  function authHeaders(extra = {}) {
+    const headers = { ...extra };
+    if (sessionToken) {
+      headers['Authorization'] = `Bearer ${sessionToken}`;
+    }
+    return headers;
+  }
+
+  function showLoginOverlay() {
+    document.getElementById('login-overlay').style.display = 'flex';
+    document.getElementById('pos-layout').classList.add('pos-locked');
+    document.getElementById('profile-section').style.display = 'none';
+  }
+
+  function hideLoginOverlay() {
+    document.getElementById('login-overlay').style.display = 'none';
+    document.getElementById('pos-layout').classList.remove('pos-locked');
+    document.getElementById('profile-section').style.display = 'flex';
+  }
+
+  function renderProfile() {
+    if (!currentUser) return;
+    const initials = (currentUser.name || currentUser.username || '?').charAt(0).toUpperCase();
+    document.getElementById('profile-avatar').textContent = initials;
+    document.getElementById('profile-name').textContent = currentUser.name || currentUser.username;
+    document.getElementById('profile-role').textContent = (currentUser.role || 'staff').toUpperCase();
+    document.getElementById('profile-full-name').textContent = currentUser.name || currentUser.username;
+    document.getElementById('profile-email').textContent = currentUser.email || '';
+    document.getElementById('profile-branch').textContent = currentUser.location
+      ? `Branch: ${currentUser.location.name}`
+      : 'All branches';
+  }
+
+  function toggleProfileDropdown(event) {
+    event.stopPropagation();
+    document.getElementById('profile-dropdown').classList.toggle('open');
+  }
+
+  document.addEventListener('click', () => {
+    document.getElementById('profile-dropdown')?.classList.remove('open');
   });
 
-  // ── Table Select ───────────────────────────────────────────────────────────
-  function populateTables() {
+  async function initAuth() {
+    const stored = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!stored) {
+      showLoginOverlay();
+      return;
+    }
+    sessionToken = stored;
+    try {
+      const res = await fetch(`${CLOUD_BASE}/api/v1/auth/me/`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error('Session expired');
+      const data = await res.json();
+      currentUser = data.user;
+      hideLoginOverlay();
+      renderProfile();
+      await loadTablesForUser(data);
+      probe();
+    } catch (e) {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      sessionToken = null;
+      currentUser = null;
+      showLoginOverlay();
+    }
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    const btn = document.getElementById('login-btn');
+    const errEl = document.getElementById('login-error');
+    errEl.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+
+    try {
+      const res = await fetch(`${CLOUD_BASE}/api/v1/auth/login/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Login failed');
+
+      sessionToken = data.session_token;
+      localStorage.setItem(AUTH_TOKEN_KEY, sessionToken);
+      currentUser = data.user;
+      hideLoginOverlay();
+      renderProfile();
+      await loadTablesForUser(data);
+      probe();
+    } catch (e) {
+      errEl.textContent = e.message;
+      errEl.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sign In to POS';
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await fetch(`${CLOUD_BASE}/api/v1/auth/logout/`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+    } catch (e) { /* ignore */ }
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionToken = null;
+    currentUser = null;
+    cart = [];
+    selectedTableUuid = null;
+    menuData = null;
+    document.getElementById('table-select').innerHTML = '<option value="">— Choose dining table —</option>';
+    document.getElementById('menu-scroll').innerHTML = `
+      <div class="loading">
+        <p style="color:var(--text-secondary); font-size:13px; font-weight:500;">Select a table to browse menu</p>
+      </div>`;
+    renderOrderPanel();
+    showLoginOverlay();
+  }
+
+  async function loadTablesForUser(authData) {
     const sel = document.getElementById('table-select');
-    TABLES_JSON.forEach(t => {
+    sel.innerHTML = '<option value="">— Choose dining table —</option>';
+
+    const locations = (authData.restaurants?.[0]?.locations) || [];
+    if (!locations.length) return;
+
+    const allTables = [];
+    for (const loc of locations) {
+      try {
+        const res = await fetch(`${CLOUD_BASE}/api/v1/tables/?location=${loc.id}`, {
+          headers: authHeaders(),
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        for (const t of data.tables) {
+          allTables.push({ ...t, location_name: loc.name });
+        }
+      } catch (e) { /* skip */ }
+    }
+
+    allTables.forEach(t => {
       const opt = document.createElement('option');
       opt.value = t.id;
-      opt.textContent = `${t.label} (${t.restaurant_name})`;
+      opt.textContent = `${t.label} (${t.location_name})`;
       sel.appendChild(opt);
     });
   }
+
+  // ── Boot ───────────────────────────────────────────────────────────────────
+  window.addEventListener('DOMContentLoaded', () => {
+    initAuth();
+    probeTimer = setInterval(probe, 20000);
+  });
 
   function onTableChange() {
     const sel = document.getElementById('table-select');
@@ -847,12 +1196,17 @@
       </div>`).join('');
       
     document.getElementById('order-total-val').textContent = formatRupee(cartTotal());
-    document.getElementById('place-btn').disabled = !selectedTableUuid;
+    document.getElementById('place-btn').disabled = !selectedTableUuid || !sessionToken;
   }
 
   // ── Place Order API ──
   async function placeOrder() {
     if (!cart.length || !selectedTableUuid) return;
+    if (!sessionToken) {
+      alert('Please sign in to place orders.');
+      showLoginOverlay();
+      return;
+    }
     const btn = document.getElementById('place-btn');
     btn.disabled = true;
     btn.textContent = 'Transmitting order…';
@@ -876,11 +1230,11 @@
     try {
       const res = await fetch(`${baseUrl}/api/v1/orders/`, {
         method: 'POST',
-        headers: {
+        headers: authHeaders({
           'Content-Type': 'application/json',
-          'Idempotency-Key': idempKey
-        },
-        body: JSON.stringify(body)
+          'Idempotency-Key': idempKey,
+        }),
+        body: JSON.stringify(body),
       });
       
       if (!res.ok) {

@@ -3,6 +3,7 @@ from django.urls import path
 from core.views import (
     SyncActiveStatusView,
     SyncClaimActiveView,
+    SyncClusterStateView,
     SyncHeartbeatView,
     SyncMenuView,
     SyncNodeConfigView,
@@ -14,6 +15,7 @@ from core.views import (
     SyncNodesView,
     SyncNodesCreateView,
     SyncPrintRoutesView,
+    SyncAuthMaterialView,
 )
 
 urlpatterns = [
@@ -22,6 +24,7 @@ urlpatterns = [
     path('orders/<uuid:order_uuid>/status/', SyncOrderStatusView.as_view()),
     path('orders/bulk/', SyncOrdersBulkView.as_view()),
     path('heartbeat/', SyncHeartbeatView.as_view()),
+    path('cluster-state/', SyncClusterStateView.as_view()),
     path('menu/', SyncMenuView.as_view()),
     path('active-status/', SyncActiveStatusView.as_view()),
     path('claim-active/', SyncClaimActiveView.as_view()),
@@ -30,4 +33,5 @@ urlpatterns = [
     path('nodes/', SyncNodesView.as_view()),
     path('nodes/create/', SyncNodesCreateView.as_view()),
     path('print-routes/', SyncPrintRoutesView.as_view()),
+    path('auth-material/', SyncAuthMaterialView.as_view()),
 ]

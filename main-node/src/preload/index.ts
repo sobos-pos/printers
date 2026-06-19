@@ -22,6 +22,16 @@ contextBridge.exposeInMainWorld('soboss', {
   savePrintRoutes: (data: any) => ipcRenderer.invoke('save-print-routes', data),
   getCloudNodes: () => ipcRenderer.invoke('get-cloud-nodes'),
   getClusterNodes: () => ipcRenderer.invoke('get-cluster-nodes'),
+  refreshClusterNodes: () => ipcRenderer.invoke('refresh-cluster-nodes'),
+  // menu management
+  getMenuGlossary: () => ipcRenderer.invoke('get-menu-glossary'),
+  getMenuTree: () => ipcRenderer.invoke('get-menu-tree'),
+  createMenuCategory: (data: any) => ipcRenderer.invoke('create-menu-category', data),
+  createMenuItem: (data: any) => ipcRenderer.invoke('create-menu-item', data),
+  updateMenuItem: (data: any) => ipcRenderer.invoke('update-menu-item', data),
+  deleteMenuItem: (data: any) => ipcRenderer.invoke('delete-menu-item', data),
+  addMenuItemMedia: (data: any) => ipcRenderer.invoke('add-menu-item-media', data),
+  deleteMenuMedia: (data: any) => ipcRenderer.invoke('delete-menu-media', data),
 })
 
 declare global {
@@ -57,6 +67,15 @@ declare global {
       savePrintRoutes: (data: any) => Promise<any>
       getCloudNodes: () => Promise<any>
       getClusterNodes: () => Promise<any>
+      refreshClusterNodes: () => Promise<any>
+      getMenuGlossary: () => Promise<any>
+      getMenuTree: () => Promise<any>
+      createMenuCategory: (data: any) => Promise<any>
+      createMenuItem: (data: any) => Promise<any>
+      updateMenuItem: (data: any) => Promise<any>
+      deleteMenuItem: (data: any) => Promise<any>
+      addMenuItemMedia: (data: any) => Promise<any>
+      deleteMenuMedia: (data: any) => Promise<any>
     }
   }
 }

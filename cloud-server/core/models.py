@@ -1,3 +1,4 @@
+import secrets
 import uuid
 
 from django.db import models
@@ -23,6 +24,22 @@ class Restaurant(BaseModel):
     address = models.TextField(blank=True)
     tax_id = models.CharField(max_length=20, blank=True)
     is_active = models.BooleanField(default=True)
+    # Shared HS256 secret used to sign staff "shift" JWTs. Every Electron device
+    # in the restaurant stores a copy so it can verify staff tokens offline.
+    # Server-side secret only — rotate via rotate_jwt_secret() on compromise.
+    jwt_signing_secret = models.CharField(max_length=128, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.jwt_signing_secret:
+            self.jwt_signing_secret = secrets.token_hex(32)
+        super().save(*args, **kwargs)
+
+    def rotate_jwt_secret(self) -> str:
+        """Issue a new signing secret (invalidates all outstanding staff tokens
+        and forces every device to re-fetch). Returns the new secret."""
+        self.jwt_signing_secret = secrets.token_hex(32)
+        self.save(update_fields=['jwt_signing_secret', 'updated_at'])
+        return self.jwt_signing_secret
 
     def __str__(self):
         return self.name
@@ -45,9 +62,18 @@ class StaffUser(AbstractUser):
     restaurant = models.ForeignKey(
         Restaurant, related_name='staff_users', on_delete=models.CASCADE, null=True, blank=True
     )
+    location = models.ForeignKey(
+        'Location', related_name='staff_users', on_delete=models.SET_NULL, null=True, blank=True
+    )
     role = models.CharField(
         max_length=20,
-        choices=[('owner', 'Owner'), ('manager', 'Manager'), ('staff', 'Staff')],
+        choices=[
+            ('owner', 'Owner'),
+            ('manager', 'Manager'),
+            ('staff', 'Staff'),
+            ('waiter', 'Waiter'),
+            ('kiosk', 'Kiosk'),
+        ],
         default='staff'
     )
 
@@ -71,6 +97,9 @@ class LocationNode(BaseModel):
     lan_port = models.IntegerField(default=3001)
     api_key_hash = models.CharField(max_length=128)
     last_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    # Freshness stamp written by the leader's consolidated cluster snapshot
+    # (SyncClusterStateView). Used to derive follower online status on read.
+    cluster_reported_at = models.DateTimeField(null=True, blank=True)
     is_online = models.BooleanField(default=False)
 
     class Meta:

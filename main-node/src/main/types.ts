@@ -54,6 +54,8 @@ export interface KotLine {
   name: string
   mods: string[]
   notes: string
+  /** Per-unit price. Used only for BILL formatting; KOT ignores it. */
+  unit_price?: number
 }
 
 export interface KotSegment {
@@ -66,6 +68,8 @@ export interface KotPrintPayload extends KotSegment {
   order_id?: string
   table?: string | null
   placed_at?: string
+  /** 'KOT' (kitchen ticket) or 'BILL' (priced receipt). Drives formatting. */
+  job_type?: string
 }
 
 export type PaperWidth = '58mm' | '80mm'
@@ -85,6 +89,58 @@ export interface SyncEvent {
   payload: Record<string, unknown>
 }
 
+export interface MenuModifierOption {
+  id: string
+  name: string
+  price: string
+  is_default?: boolean
+  in_stock?: boolean
+  kind?: string | null
+  nested_option_groups?: MenuModifierGroup[]
+}
+
+export interface MenuModifierGroup {
+  id: string
+  name: string
+  slug?: string
+  min_selection: number
+  max_selection: number
+  required?: boolean
+  options: MenuModifierOption[]
+}
+
+export interface MenuVariant {
+  id: string
+  name: string
+  price: string
+  tax_group?: string | null
+  taxes?: string[]
+  portion_size?: { value: string; unit: string | null } | null
+  charges?: Array<{ slug: string; value: string }>
+}
+
+export interface MenuItemPayload {
+  id: string
+  name: string
+  description?: string
+  kind?: string
+  subcategory_id?: string | null
+  is_available: boolean
+  // Convenience "from" price = cheapest available variant.
+  base_price: string
+  station?: { code: string; name: string } | null
+  preparation_time?: string | null
+  serving_info?: string | null
+  tags?: string[]
+  meat_types?: string[]
+  allergens?: string[]
+  nutrition?: Record<string, number | string | null>
+  box_metadata?: { rows: number | null; columns: number | null } | null
+  media?: string[]
+  variants?: MenuVariant[]
+  modifier_groups?: MenuModifierGroup[]
+}
+
 export interface MenuCachePayload {
   table?: { id: string; label: string }
   menu_version?: number
@@ -92,23 +148,11 @@ export interface MenuCachePayload {
   categories: Array<{
     id: string
     name: string
+    description?: string
     display_order: number
-    items: Array<{
-      id: string
-      name: string
-      description?: string
-      base_price: string
-      is_available: boolean
-      station?: { code: string; name: string } | null
-      variants?: Array<{ id: string; name: string; price_delta: string }>
-      modifier_groups?: Array<{
-        id: string
-        name: string
-        min_select: number
-        max_select: number
-        options: Array<{ id: string; name: string; price_delta: string; is_available: boolean }>
-      }>
-    }>
+    image?: string | null
+    subcategories?: Array<{ id: string; name: string; display_order: number }>
+    items: MenuItemPayload[]
   }>
 }
 

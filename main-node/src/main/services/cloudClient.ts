@@ -6,13 +6,17 @@ import {
   isCloudConfigured,
   isDemoCloudBlocked,
 } from '../config'
-import { haService } from './nodeConfigService'
+import { getLanIp } from '../net'
 
 const TIMEOUT_MS = 5000
+// Menu writes can carry base64 image payloads; the upload + server-side image
+// validation and file write easily exceed the 5 s default, so they opt into a
+// longer timeout to avoid spuriously aborting a request that actually succeeds.
+const UPLOAD_TIMEOUT_MS = 60000
 
 async function cloudFetch(
   path: string,
-  options: RequestInit & { mutating?: boolean } = {},
+  options: RequestInit & { mutating?: boolean; timeoutMs?: number } = {},
 ): Promise<Response> {
   if (isDemoCloudBlocked()) throw new CloudBlockedError()
   if (!isCloudConfigured()) throw new Error('Cloud not configured')
@@ -29,7 +33,7 @@ async function cloudFetch(
   }
 
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_MS)
 
   try {
     const res = await fetch(`${config.cloudBaseUrl}${path}`, {
@@ -39,7 +43,17 @@ async function cloudFetch(
     })
 
     if (res.status === 409 && options.mutating) {
-      haService.demoteToStandby()
+      // A 409 NOT_ACTIVE_HOLDER means the cloud may have reassigned the lease
+      // (e.g. another node was force-promoted). Trigger an immediate heartbeat
+      // so the authoritative role is re-resolved right away instead of waiting
+      // up to one heartbeat interval — this closes the dual-leader window. We
+      // poke the heartbeat (rather than demote outright) so a cold-booting
+      // leader whose lease merely lapsed re-claims instead of being demoted.
+      if (config.clusterRole === 'leader') {
+        import('../workers/heartbeatWorker')
+          .then(({ heartbeatWorker }) => heartbeatWorker.runNow())
+          .catch(() => {})
+      }
       throw new NotActiveHolderError()
     }
 
@@ -112,19 +126,6 @@ export const cloudClient = {
   },
 
   async sendHeartbeat(isActive: boolean) {
-    const os = await import('os')
-    const getLocalIp = () => {
-      const nets = os.networkInterfaces()
-      for (const name of Object.keys(nets)) {
-        for (const net of nets[name] || []) {
-          if (net.family === 'IPv4' && !net.internal) {
-            return net.address
-          }
-        }
-      }
-      return '127.0.0.1'
-    }
-
     const { nodeConfigRepository } = await import('../repositories/nodeConfigRepository')
     const nodeLabel = nodeConfigRepository.get('node_label') || ''
 
@@ -137,12 +138,34 @@ export const cloudClient = {
         is_active: isActive,
         cluster_role: config.clusterRole,
         node_label: nodeLabel,
-        lan_host: getLocalIp(),
+        lan_host: getLanIp(),
         lan_port: config.localApiPort,
       }),
     })
     if (!res.ok) throw new Error(`heartbeat failed: ${res.status}`)
     return res.json()
+  },
+
+  // Leader → cloud consolidated cluster snapshot. The cloud becomes a
+  // read-only mirror of the leader-owned membership/status.
+  async reportClusterState(snapshot: {
+    leader_id: string
+    nodes: Array<{
+      node_id: string
+      node_label: string
+      cluster_role: string
+      lan_host: string
+      lan_port: number
+      status: string
+      last_seen: string
+    }>
+  }) {
+    const res = await cloudFetch('/api/v1/sync/cluster-state/', {
+      method: 'POST',
+      body: JSON.stringify(snapshot),
+    })
+    if (!res.ok) throw new Error(`reportClusterState failed: ${res.status}`)
+    return res.json() as Promise<{ updated: number }>
   },
 
   async markOffline() {
@@ -265,7 +288,18 @@ export const cloudClient = {
       node_name: string
       cluster_role: string
       location: { id: string; name: string }
+      restaurant_id?: string
+      jwt_secret?: string
     }>
+  },
+
+  // Fetch the restaurant's staff-token verification material with the node's
+  // own Api-Key. Used on boot to back-fill the secret for devices provisioned
+  // before this feature, and to pick up a rotated secret.
+  async fetchAuthMaterial() {
+    const res = await cloudFetch('/api/v1/sync/auth-material/')
+    if (!res.ok) throw new Error(`fetchAuthMaterial failed: ${res.status}`)
+    return res.json() as Promise<{ restaurant_id: string; jwt_secret: string }>
   },
 
   // Fetch the full node inventory from Cloud using the node's own Api-Key
@@ -314,5 +348,87 @@ export const cloudClient = {
     })
     if (!res.ok) throw new Error(`savePrintRoutes failed: ${res.status}`)
     return res.json() as Promise<{ saved: number }>
+  },
+
+  // ── Menu management (Api-Key authed, scoped to this node's location) ────
+
+  async fetchMenuGlossary() {
+    const res = await cloudFetch('/api/v1/menu/glossary/')
+    if (!res.ok) throw new Error(`fetchMenuGlossary failed: ${res.status}`)
+    return res.json() as Promise<Record<string, unknown>>
+  },
+
+  async fetchMenuTree() {
+    const res = await cloudFetch('/api/v1/menu/tree/')
+    if (!res.ok) throw new Error(`fetchMenuTree failed: ${res.status}`)
+    return res.json() as Promise<{ categories: unknown[] }>
+  },
+
+  async createMenuCategory(payload: Record<string, unknown>) {
+    const res = await cloudFetch('/api/v1/menu/categories/', {
+      method: 'POST',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `createMenuCategory failed: ${res.status}`)
+    return data as { id: string; name: string }
+  },
+
+  async createMenuItem(payload: Record<string, unknown>) {
+    const res = await cloudFetch('/api/v1/menu/items/', {
+      method: 'POST',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `createMenuItem failed: ${res.status}`)
+    return data as { id: string; name: string }
+  },
+
+  async updateMenuItem(itemId: string, payload: Record<string, unknown>) {
+    const res = await cloudFetch(`/api/v1/menu/items/${itemId}/`, {
+      method: 'PATCH',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `updateMenuItem failed: ${res.status}`)
+    return data as { id: string; name: string; is_available: boolean }
+  },
+
+  async deleteMenuItem(itemId: string) {
+    const res = await cloudFetch(`/api/v1/menu/items/${itemId}/`, {
+      method: 'DELETE',
+      mutating: true,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `deleteMenuItem failed: ${res.status}`)
+    return data as { deleted: boolean }
+  },
+
+  async addMenuItemMedia(itemId: string, image: string) {
+    const res = await cloudFetch(`/api/v1/menu/items/${itemId}/media/`, {
+      method: 'POST',
+      mutating: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      body: JSON.stringify({ image }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `addMenuItemMedia failed: ${res.status}`)
+    return data as { id: string; url: string; is_primary: boolean }
+  },
+
+  async deleteMenuMedia(mediaId: string) {
+    const res = await cloudFetch(`/api/v1/menu/media/${mediaId}/`, {
+      method: 'DELETE',
+      mutating: true,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error((data as any).error || `deleteMenuMedia failed: ${res.status}`)
+    return data as { deleted: boolean }
   },
 }

@@ -11,9 +11,28 @@ import type {
   BulkOrderItem,
   CreateOrderInput,
   LocalOrder,
+  MenuModifierGroup,
+  MenuModifierOption,
   OrderStatus,
   SerializedOrder,
 } from '../types'
+
+/** Depth-first search for a modifier option by id, descending into nested
+ * option groups so deeply-nested selections (e.g. sugar level on an add-on
+ * beverage) are still resolved and priced. */
+function findOption(
+  groups: MenuModifierGroup[] | undefined,
+  optionId: string,
+): MenuModifierOption | null {
+  for (const group of groups ?? []) {
+    for (const opt of group.options ?? []) {
+      if (opt.id === optionId) return opt
+      const nested = findOption(opt.nested_option_groups, optionId)
+      if (nested) return nested
+    }
+  }
+  return null
+}
 
 function serializeOrder(order: LocalOrder): SerializedOrder {
   return {
@@ -49,30 +68,29 @@ function buildLineItems(items: BulkOrderItem[]) {
     const found = menuService.findMenuItem(itemData.menu_item)
     if (!found) throw new Error(`Menu item not found: ${itemData.menu_item}`)
 
+    // Variants carry the absolute price. A chosen variant sets the unit price
+    // outright; otherwise fall back to base_price (cheapest available variant).
     let unitPrice = parseFloat(found.item.base_price)
     let variantName: string | null = null
     if (itemData.variant) {
       const variant = found.item.variants?.find((v) => v.id === itemData.variant)
       if (variant) {
-        unitPrice += parseFloat(variant.price_delta)
+        unitPrice = parseFloat(variant.price)
         variantName = variant.name
       }
     }
 
     const modifiers = (itemData.modifiers ?? []).map((modId) => {
-      for (const group of found.item.modifier_groups ?? []) {
-        const opt = group.options?.find((o) => o.id === modId)
-        if (opt) {
-          unitPrice += parseFloat(opt.price_delta)
-          return {
-            id: uuidv4(),
-            modifier_id: modId,
-            name_snapshot: opt.name,
-            price: parseFloat(opt.price_delta),
-          }
-        }
+      const opt = findOption(found.item.modifier_groups, modId)
+      if (!opt) throw new Error(`Modifier not found: ${modId}`)
+      const price = parseFloat(opt.price)
+      unitPrice += price
+      return {
+        id: uuidv4(),
+        modifier_id: modId,
+        name_snapshot: opt.name,
+        price,
       }
-      throw new Error(`Modifier not found: ${modId}`)
     })
 
     const name = variantName ? `${found.item.name} (${variantName})` : found.item.name
@@ -126,7 +144,14 @@ export const orderService = {
     kdsService.broadcastNewOrder(serializeOrder(order))
 
     const kot = kotService.buildKot(order)
+    // Each station segment produces a KOT (kitchen ticket) and a BILL (priced
+    // receipt). Both are routed independently by (station, type) so an offline
+    // follower's BILL and KOT both fall back to the leader.
     printService.enqueueSegments(orderId, kot.segments, 'KOT', {
+      table: kot.table,
+      placedAt: kot.placed_at,
+    })
+    printService.enqueueSegments(orderId, kot.segments, 'BILL', {
       table: kot.table,
       placedAt: kot.placed_at,
     })
@@ -200,6 +225,10 @@ export const orderService = {
     kdsService.broadcastNewOrder(serializeOrder(order))
     const kot = kotService.buildKot(order)
     printService.enqueueSegments(order.id, kot.segments, 'KOT', {
+      table: kot.table,
+      placedAt: kot.placed_at,
+    })
+    printService.enqueueSegments(order.id, kot.segments, 'BILL', {
       table: kot.table,
       placedAt: kot.placed_at,
     })

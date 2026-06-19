@@ -155,6 +155,7 @@
     <button class="active" data-panel="status">Status</button>
     <button data-panel="kotlog">KOT Log</button>
     <button data-panel="printers">Printers</button>
+    <button id="nav-menu-btn" data-panel="menu" style="display:none">Menu</button>
     <button id="nav-nodes-btn" data-panel="nodes" style="display:none">Node Management</button>
     <button id="nav-cluster-btn" data-panel="cluster" style="display:none">Cluster Status</button>
     <button data-panel="ha">HA &amp; Reset</button>
@@ -256,6 +257,106 @@
       </div>
     </div>
 
+    <!-- MENU MANAGEMENT -->
+    <div id="panel-menu" class="panel">
+      <div class="section">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <h2 style="margin:0;border:none;padding:0">Menu</h2>
+          <button class="btn btn-secondary btn-sm" id="menu-refresh-btn">↻ Refresh</button>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin:8px 0 0">
+          Changes are saved to the cloud (the source of truth) and synced to every node automatically.
+        </p>
+      </div>
+
+      <!-- Add Category -->
+      <div class="section">
+        <h2>Add Category</h2>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="menu-cat-name" placeholder="Category name (e.g. Starters)"
+            style="flex:1;min-width:200px;padding:10px 14px;background:#0b0f19;border:1px solid var(--border-color);border-radius:8px;color:#fff;font-size:14px" />
+          <label class="btn btn-secondary" style="cursor:pointer">
+            <span id="menu-cat-image-label">Choose Image</span>
+            <input type="file" id="menu-cat-image" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" />
+          </label>
+          <button class="btn" id="menu-add-cat-btn">Add Category</button>
+        </div>
+      </div>
+
+      <!-- Add Item -->
+      <div class="section">
+        <h2>Add Menu Item</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="form-group" style="margin:0">
+            <label>Name</label>
+            <input type="text" id="mi-name" placeholder="e.g. Butter Chicken" />
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Category</label>
+            <select id="mi-category"></select>
+          </div>
+          <div class="form-group" style="margin:0;grid-column:1/-1">
+            <label>Description</label>
+            <input type="text" id="mi-description" placeholder="Short description (optional)" />
+          </div>
+          <div class="form-group" style="margin:0;grid-column:1/-1">
+            <label>Images (optional)</label>
+            <input type="file" id="mi-images" accept="image/png,image/jpeg,image/gif,image/webp" multiple />
+            <div id="mi-image-previews" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Dietary (required)</label>
+            <select id="mi-dietary"></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>GST Class</label>
+            <select id="mi-gst"></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Kitchen Station</label>
+            <select id="mi-station"></select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Prep Time</label>
+            <select id="mi-prep"></select>
+          </div>
+        </div>
+
+        <!-- Variants -->
+        <div style="margin-top:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <p style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Variants &amp; Pricing</p>
+            <button class="btn btn-secondary btn-sm" id="mi-add-variant-btn">+ Add Variant</button>
+          </div>
+          <table style="margin-top:8px">
+            <thead><tr><th>Name</th><th>Price (₹)</th><th>Tax Group</th><th></th></tr></thead>
+            <tbody id="mi-variants-body"></tbody>
+          </table>
+        </div>
+
+        <!-- Modifier groups -->
+        <div style="margin-top:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <p style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">Modifier Groups (optional)</p>
+            <button class="btn btn-secondary btn-sm" id="mi-add-group-btn">+ Add Group</button>
+          </div>
+          <div id="mi-groups" style="margin-top:8px;display:flex;flex-direction:column;gap:12px"></div>
+        </div>
+
+        <div id="mi-error" class="error-msg" style="margin-top:16px"></div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:16px">
+          <button class="btn" id="mi-save-btn">Save Item</button>
+          <span id="mi-status" style="font-size:13px;color:var(--text-muted)"></span>
+        </div>
+      </div>
+
+      <!-- Current Menu -->
+      <div class="section">
+        <h2>Current Menu</h2>
+        <div id="menu-tree"><p style="color:var(--text-muted);font-size:13px">Loading menu…</p></div>
+      </div>
+    </div>
+
     <!-- NODE MANAGEMENT (Leader only) -->
     <div id="panel-nodes" class="panel">
       <!-- Print Routing section -->
@@ -283,8 +384,11 @@
 
       <!-- Nodes section -->
       <div class="section">
-        <h2>Nodes</h2>
-        <table id="nodes-table">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <h2 style="margin:0">Nodes</h2>
+          <button class="btn" id="refresh-nodes-btn" style="padding:8px 14px;font-size:13px">↻ Refresh</button>
+        </div>
+        <table id="nodes-table" style="margin-top:16px">
           <thead>
             <tr>
               <th>Node Name</th>

@@ -30,9 +30,9 @@ class LocationLeaseAdmin(admin.ModelAdmin):
 
 @admin.register(StaffUser)
 class StaffUserAdmin(UserAdmin):
-    list_display = ['username', 'email', 'restaurant', 'role', 'is_staff']
+    list_display = ['username', 'email', 'restaurant', 'location', 'role', 'is_staff']
     fieldsets = UserAdmin.fieldsets + (
-        ('Restaurant Details', {'fields': ('restaurant', 'role')}),
+        ('Restaurant Details', {'fields': ('restaurant', 'location', 'role')}),
     )
 
 

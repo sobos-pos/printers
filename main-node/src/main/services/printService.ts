@@ -4,6 +4,7 @@ import { printerRepository } from '../repositories/printerRepository'
 import { printRouteRepository } from '../repositories/printRouteRepository'
 import type { KotPrintPayload, KotSegment, PaperWidth } from '../types'
 import { resolvePrinterDriver } from './printerDriver'
+import { recordPrintedKot } from './kotLogService'
 
 export function backoffDelayMs(attemptCount: number): number {
   const schedule = [5000, 15000, 30000, 60000]
@@ -13,6 +14,7 @@ export function backoffDelayMs(attemptCount: number): number {
 
 function buildPrintPayload(
   segment: KotSegment,
+  jobType: string,
   meta?: { orderId?: string; table?: string | null; placedAt?: string },
 ): KotPrintPayload {
   return {
@@ -20,20 +22,29 @@ function buildPrintPayload(
     order_id: meta?.orderId,
     table: meta?.table,
     placed_at: meta?.placedAt,
+    job_type: jobType,
   }
 }
 
 export const printService = {
   resolvePrinterId(station: string, jobType = 'KOT'): string | null {
+    // 1. Exact mapping for this station + type on THIS node.
     const route = printerRepository.getRoute(station, jobType)
-    if (!route) {
-      const fallback = printerRepository.getRoute('KITCHEN', jobType)
-      return fallback?.printer_id ?? null
+    if (route) {
+      const printer = printerRepository.getPrinter(route.printer_id)
+      if (printer && printer.enabled) return printer.id
+      if (route.fallback_printer_id) return route.fallback_printer_id
+      return route.printer_id
     }
-    const printer = printerRepository.getPrinter(route.printer_id)
-    if (printer && printer.enabled) return printer.id
-    if (route.fallback_printer_id) return route.fallback_printer_id
-    return route.printer_id
+    // 2. Same node's KITCHEN mapping for this type — covers the common
+    //    single-printer setup where everything funnels to one printer.
+    const kitchen = printerRepository.getRoute('KITCHEN', jobType)
+    if (kitchen?.printer_id) return kitchen.printer_id
+    // 3. Last resort: this node's first enabled printer, so a fallback print
+    //    (e.g. the leader taking over an offline follower's station) is never
+    //    dropped just because no explicit mapping exists for that station.
+    const fallback = printerRepository.getAllPrinters().find((p) => p.enabled)
+    return fallback?.id ?? null
   },
 
   enqueueSegments(
@@ -44,7 +55,7 @@ export const printService = {
   ): void {
     for (const segment of segments) {
       const printerId = this.resolvePrinterId(segment.station, jobType)
-      const payload = buildPrintPayload(segment, {
+      const payload = buildPrintPayload(segment, jobType, {
         orderId,
         table: meta?.table,
         placedAt: meta?.placedAt,
@@ -71,8 +82,10 @@ export const printService = {
       }
 
       // On the leader, check print routing to decide if this station should
-      // be forwarded to a remote follower node.
-      if (config.clusterRole === 'leader' && job.attempt_count < 3) {
+      // be forwarded to a remote follower node. Never re-forward a job that was
+      // itself forwarded to us (a follower that booted as 'leader' must still
+      // print such jobs locally — otherwise it bounces back and never prints/logs).
+      if (config.clusterRole === 'leader' && job.attempt_count < 3 && !printJobRepository.isForwarded(job.id)) {
         const route = printRouteRepository.getByStationAndType(
           config.locationId,
           job.station,
@@ -83,7 +96,7 @@ export const printService = {
           const { clusterNodeRepository } = await import('../repositories/clusterNodeRepository')
           const node = clusterNodeRepository.get(route.assigned_node_id)
 
-          if (node && node.status === 'ONLINE') {
+          if (node && clusterNodeRepository.isOnline(node)) {
             console.log(`[Print] Forwarding job ${job.id} for ${job.station}/${job.job_type} to ${node.node_id} (Attempt ${job.attempt_count + 1})`)
             const { clusterService } = await import('./clusterService')
             const ok = await clusterService.forwardPrintJob(node.node_id, {
@@ -95,7 +108,7 @@ export const printService = {
             })
 
             if (ok) {
-              printJobRepository.markPrinted(job.id)
+              printJobRepository.markForwarded(job.id)
               console.log(`[Print] Job ${job.id} forwarded to ${node.node_id}`)
               continue
             } else {
@@ -136,6 +149,9 @@ export const printService = {
       try {
         await driver.print(payload, ctx)
         printJobRepository.markPrinted(job.id)
+        // Log on the node that actually printed it (leader or follower), so each
+        // node's KOT log reflects its own output.
+        recordPrintedKot(payload)
         console.log(`[Print] Job ${job.id} → PRINTED locally`)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)

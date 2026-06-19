@@ -5,13 +5,14 @@ from django.core.management.base import BaseCommand
 from core.authentication import ApiKeyAuth
 from core.models import Location, Restaurant
 from menu.models import (
-    DietaryTag,
     MenuCategory,
     MenuItem,
     MenuVersion,
     Modifier,
     ModifierGroup,
     PrinterStation,
+    Tag,
+    TaxGroup,
     Variant,
 )
 from tables.models import Table
@@ -39,8 +40,11 @@ class Command(BaseCommand):
             location=location, code='BAR', defaults={'name': 'Bar'}
         )
 
-        veg, _ = DietaryTag.objects.get_or_create(label='Veg', defaults={'icon': 'leaf'})
-        DietaryTag.objects.get_or_create(label='Spicy', defaults={'icon': 'fire'})
+        # Glossary tags/tax groups are seeded by the menu data migration.
+        veg = Tag.objects.get(slug='veg')
+        goods = Tag.objects.get(slug='goods')
+        spicy = Tag.objects.get(slug='spicy')
+        gst5 = TaxGroup.objects.get(slug='GST_D_P_5.00')
 
         MenuVersion.objects.get_or_create(location=location)
 
@@ -56,27 +60,35 @@ class Command(BaseCommand):
             name='Margherita Pizza',
             defaults={
                 'description': 'Classic tomato + mozzarella',
-                'base_price': '299.00',
                 'station': kitchen,
             },
         )
-        pizza.dietary_tags.add(veg)
-        Variant.objects.get_or_create(menu_item=pizza, name='S', defaults={'price_delta': '0'})
-        Variant.objects.get_or_create(menu_item=pizza, name='L', defaults={'price_delta': '120'})
+        pizza.tags.add(veg, goods)
+        # Variants carry the absolute price + tax group (no item base price).
+        Variant.objects.get_or_create(
+            menu_item=pizza, name='S', defaults={'price': '299.00', 'tax_group': gst5}
+        )
+        Variant.objects.get_or_create(
+            menu_item=pizza, name='L', defaults={'price': '419.00', 'tax_group': gst5}
+        )
         grp, _ = ModifierGroup.objects.get_or_create(
             menu_item=pizza,
             name='Add-ons',
-            defaults={'min_select': 0, 'max_select': 3},
+            defaults={'min_selection': 0, 'max_selection': 3},
         )
         Modifier.objects.get_or_create(
-            group=grp, name='Extra Cheese', defaults={'price_delta': '40'}
+            group=grp, name='Extra Cheese', defaults={'price': '40'}
         )
 
         bar = PrinterStation.objects.get(location=location, code='BAR')
-        MenuItem.objects.get_or_create(
+        soda, _ = MenuItem.objects.get_or_create(
             category=drinks,
             name='Lime Soda',
-            defaults={'base_price': '79.00', 'station': bar},
+            defaults={'station': bar},
+        )
+        soda.tags.add(veg, goods, spicy)
+        Variant.objects.get_or_create(
+            menu_item=soda, name='Regular', defaults={'price': '79.00', 'tax_group': gst5}
         )
 
         for label in ['T1', 'T2', 'T3', 'T4', 'T5']:
