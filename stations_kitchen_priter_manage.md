@@ -374,3 +374,27 @@ Building on §3, the full set (each row also satisfies every simpler case):
 > Net: **visibility = `Section → SectionMenu → Menu → MenuListing(price)`**, **preparation =
 > `MenuItem.kitchen`**, **billing = `Order → Table → one BILL`**. All `Location`-scoped (branch).
 > A given branch picks whichever subset it needs — Case 1 ignores most of it; Case 6 uses all of it.
+
+
+
+## Real case Example  
+
+**Item inclusion matrix (your exact example):**
+
+| Item | Janatha Bar | Premium Bar | Multi-Cuisine | Kitchen | Billing |
+|---|---|---|---|---|---|
+| Soda / mixers | ✅ Include | ✅ Include | ✅ Include | Same kitchen | Same bill |
+| Regular whiskey | ✅ Include | ✅ Include | ❌ Exclude | Same kitchen | Same bill |
+| Premium single malt | ❌ Exclude | ✅ Include | ❌ Exclude | Same kitchen | Same bill |
+| Peanuts / bar snacks | ✅ Include | ✅ Include | ❌ Exclude | Same kitchen | Same bill |
+| Butter chicken / biryani | ❌ Exclude | ❌ Exclude | ✅ Include | Same kitchen | Same bill |
+
+Kitchen stays constant down the whole column — overlap or not, it's never the thing deciding routing. Routing is per-item, billing is per-order.
+
+**On your billing point** — you said two things that sound contradictory ("Janatha different bill, bar different bill" vs "all in single bill"), so let me cover both real patterns:
+
+| Billing Model | Behavior | When you'd use it |
+|---|---|---|
+| **Consolidated (single tab)** | One table/customer session = one bill, no matter how many stations/menus the items came from | Standard fine-dine + bar combo, one waiter closes one check |
+| **Per-station tab** | Each station (Janatha / Premium / Multi-cuisine) opens its own running tab even for the same physical table | Bars that settle independently of the kitchen, common in club/lounge setups |
+| **Split-then-merge** | Tabs open per station during service, merged into one invoice only at final settlement | Best of both — kitchen/bar print separately, accounts see one bill |
