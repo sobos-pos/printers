@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { runMigrations } from './db/migrate'
+import { getDb } from './db/connection'
 import {
   config,
   isCloudConfigured,
@@ -438,6 +439,44 @@ function registerIpc(): void {
     const { printerConfigService } = await import('./services/printerConfigService')
     const saved = await printerConfigService.saveAssignments(assignments ?? [])
     return { saved }
+  })
+
+  ipcMain.handle('clear-stuck-jobs', () => {
+    // Expires ALL pending/retrying jobs regardless of age — used to manually
+    // clear a backlog built up while a printer was offline.
+    const cleared = printJobRepository.expireStaleJobs(0)
+    return { cleared }
+  })
+
+  ipcMain.handle('wipe-local-data', () => {
+    // Wipes all operational data from the local SQLite database while keeping
+    // node_config intact (so the node stays connected to Cloud after the wipe).
+    // Used after a full cloud wipe to start fresh without needing to re-run
+    // the Setup Wizard.
+    workerManager.stopAllWorkers()
+    const db = getDb()
+    const tables = [
+      'remote_print_jobs',
+      'cluster_nodes',
+      'node_state',
+      'print_routes',
+      'printers',
+      'menu_cache',
+      'sync_cursor',
+      'sync_log',
+      'print_jobs',
+      'orders', // cascades order_items and order_item_modifiers
+    ]
+    let totalDeleted = 0
+    for (const t of tables) {
+      const result = db.prepare(`DELETE FROM ${t}`).run() as { changes: number }
+      totalDeleted += result.changes
+    }
+    // Restart workers so the node resumes printing / heartbeat immediately.
+    if (isCloudConfigured()) {
+      workerManager.bootFromState()
+    }
+    return { deleted: totalDeleted }
   })
 
   ipcMain.handle('list-os-printers', async () => {

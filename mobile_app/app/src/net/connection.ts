@@ -14,6 +14,7 @@
 
 import { create } from 'zustand'
 import { DEFAULTS, NET } from '../lib/config'
+import { loadNetInfo } from '../lib/nativeModules'
 import {
   clearDiscoveredNodeUrl,
   getCloudBaseUrl,
@@ -220,17 +221,9 @@ export const useConnection = create<ConnectionState>((set, get) => ({
 
   startNetworkListener: () => {
     if (netInfoUnsub) return
-    // Lazy require: only custom dev-client / production builds carry the native
-    // module. Absent in Expo Go / web / CI — degrade to a no-op (the auto-probe
-    // self-heal above still recovers within one interval).
-    let NetInfo: any
-    try {
-      const mod = require('@react-native-community/netinfo')
-      NetInfo = mod.default ?? mod
-    } catch {
-      return
-    }
-    if (!NetInfo?.addEventListener) return
+    // Absent in stale dev builds / Expo Go — degrade to a no-op (auto-probe still recovers).
+    const NetInfo = loadNetInfo()
+    if (!NetInfo) return
 
     try {
       netInfoUnsub = NetInfo.addEventListener((state: { isConnected?: boolean | null }) => {

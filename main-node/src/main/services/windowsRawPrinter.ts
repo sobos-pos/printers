@@ -175,11 +175,14 @@ export async function isWindowsPrinterAvailable(printerName: string): Promise<bo
     `if ($null -eq $p) { Write-Output 'false'; exit }`,
     `if ($p.WorkOffline -eq $true) { Write-Output 'false'; exit }`,
     `if ($p.PrinterStatus -eq 7) { Write-Output 'false'; exit }`, // 7 = Offline
-    // USB: confirm the physical device is still enumerated by PnP
+    // USB: confirm the physical device is still enumerated by PnP.
+    // Windows appends suffixes like " (2)", " (3)" and " [USB001]" to spooler names
+    // when the same printer model is installed multiple times, but the PnP FriendlyName
+    // stays as the bare model name. Strip those suffixes before comparing.
     `if ($p.PortName -match '^USB\\d+$') {`,
-    `  $pnp = Get-PnpDevice -Class Printer -Status OK -ErrorAction SilentlyContinue |`,
-    `         Where-Object { $_.FriendlyName -eq $p.Name }`,
-    `  if ($null -eq $pnp) { Write-Output 'false'; exit }`,
+    `  $baseName = (($p.Name -replace '\\s*\\(\\d+\\)\\s*$', '') -replace '\\s*\\[\\w+\\]\\s*$', '').Trim()`,
+    `  $pnp = Get-PnpDevice -Class PrintQueue -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq $baseName -or $p.Name -like "$($_.FriendlyName)*" }`,
+    `  if (-not ($pnp)) { Write-Output 'false'; exit }`,
     `}`,
     // COM/Bluetooth: confirm the virtual serial port is still present
     `if ($p.PortName -match '^COM\\d+$') {`,

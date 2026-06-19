@@ -9,20 +9,26 @@ import { useConnection } from '../net/connection'
 import { ApiError } from '../net/apiClient'
 import {
   clearAuthContext,
+  clearStaffToken,
   clearToken,
   getAuthContext,
+  getStaffToken,
   getToken,
   saveAuthContext,
+  saveStaffToken,
   saveToken,
 } from '../lib/storage'
 import type { AuthContext } from '../lib/types'
-import { fetchMe, login as loginApi } from './api'
+import { fetchMe, login as loginApi, refreshStaffToken } from './api'
 
 type AuthStatus = 'loading' | 'authenticated' | 'anonymous'
 
 interface AuthStore {
   status: AuthStatus
+  /** Session token (tok_xxx) — used for cloud API calls. */
   token: string | null
+  /** Staff shift JWT — used for node (local mode) API calls. */
+  staffToken: string | null
   context: AuthContext | null
   selectedLocationId: string | null
 
@@ -48,11 +54,16 @@ function defaultLocation(ctx: AuthContext | null): string | null {
 export const useAuth = create<AuthStore>((set, get) => ({
   status: 'loading',
   token: null,
+  staffToken: null,
   context: null,
   selectedLocationId: null,
 
   bootstrap: async () => {
-    const [token, cached] = await Promise.all([getToken(), getAuthContext()])
+    const [token, staffToken, cached] = await Promise.all([
+      getToken(),
+      getStaffToken(),
+      getAuthContext(),
+    ])
     if (!token) {
       set({ status: 'anonymous' })
       return
@@ -60,6 +71,7 @@ export const useAuth = create<AuthStore>((set, get) => ({
     // Restore immediately from cache so the app is usable offline...
     set({
       token,
+      staffToken,
       context: cached,
       selectedLocationId: defaultLocation(cached),
       status: 'authenticated',
@@ -74,6 +86,14 @@ export const useAuth = create<AuthStore>((set, get) => ({
         context: fresh,
         selectedLocationId: s.selectedLocationId ?? defaultLocation(fresh),
       }))
+      // Refresh the staff JWT so the node token doesn't expire mid-shift.
+      try {
+        const { access_token } = await refreshStaffToken(cloud, token)
+        await saveStaffToken(access_token)
+        set({ staffToken: access_token })
+      } catch {
+        // Not fatal — old staffToken still works until it expires (12h TTL).
+      }
     } catch (err) {
       // Only log out on a definitive 401; transient/offline errors keep the cached session.
       if (err instanceof ApiError && err.status === 401) {
@@ -85,10 +105,13 @@ export const useAuth = create<AuthStore>((set, get) => ({
   login: async (email, password) => {
     const cloud = useConnection.getState().cloudBaseUrl
     const res = await loginApi(cloud, email, password)
-    const { session_token, ...context } = res
-    await Promise.all([saveToken(session_token), saveAuthContext(context)])
+    const { session_token, access_token, expires_at, expires_in, ...context } = res
+    const saves: Promise<void>[] = [saveToken(session_token), saveAuthContext(context)]
+    if (access_token) saves.push(saveStaffToken(access_token))
+    await Promise.all(saves)
     set({
       token: session_token,
+      staffToken: access_token ?? null,
       context,
       selectedLocationId: defaultLocation(context),
       status: 'authenticated',
@@ -96,8 +119,8 @@ export const useAuth = create<AuthStore>((set, get) => ({
   },
 
   logout: async () => {
-    await Promise.all([clearToken(), clearAuthContext()])
-    set({ status: 'anonymous', token: null, context: null, selectedLocationId: null })
+    await Promise.all([clearToken(), clearStaffToken(), clearAuthContext()])
+    set({ status: 'anonymous', token: null, staffToken: null, context: null, selectedLocationId: null })
   },
 
   selectLocation: (locationId) => set({ selectedLocationId: locationId }),

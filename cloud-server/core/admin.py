@@ -11,8 +11,12 @@ class RestaurantAdmin(admin.ModelAdmin):
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ['name', 'restaurant', 'is_active']
+    list_display = ['name', 'restaurant', 'is_active', 'latitude', 'longitude', 'geofence_radius_m']
     list_select_related = ['restaurant']
+    fields = [
+        'restaurant', 'name', 'address', 'timezone', 'is_active',
+        'latitude', 'longitude', 'geofence_radius_m',
+    ]
 
 
 @admin.register(LocationNode)

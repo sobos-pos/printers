@@ -10,9 +10,24 @@ import {
   saveMenuCache,
   saveTablesCache,
 } from '../lib/storage'
-import type { MenuResponse, Order, TableSummary } from '../lib/types'
+import type {
+  AttendanceHistory,
+  AttendanceStatus,
+  Coords,
+  MenuResponse,
+  Order,
+  TableSummary,
+} from '../lib/types'
 import { useConnection } from '../net/connection'
-import { createOrder, getMenu, getTables } from './api'
+import {
+  clockIn,
+  clockOut,
+  createOrder,
+  getAttendanceHistory,
+  getAttendanceStatus,
+  getMenu,
+  getTables,
+} from './api'
 import { useCart } from './cart'
 
 export function useTables(locationId: string | null) {
@@ -62,7 +77,9 @@ export function usePlaceOrder() {
       // Re-probe so we place against the right base, then resolve it.
       await conn.probe(false)
       const base = conn.activeBaseUrl()
-      const token = useAuth.getState().token
+      // Node (local mode) verifies a staff JWT offline; cloud uses the session tok_.
+      const auth = useAuth.getState()
+      const token = conn.mode === 'local' ? (auth.staffToken ?? auth.token) : auth.token
       const cart = useCart.getState()
       const idempotencyKey = cart.ensureIdempotencyKey()
       const input = cart.toOrderInput(tableUuid)
@@ -71,6 +88,60 @@ export function usePlaceOrder() {
     onSuccess: (order) => {
       queryClient.setQueryData(['order', order.id], order)
     },
+  })
+}
+
+// ---- Attendance hooks ----
+
+export function useAttendanceStatus() {
+  return useQuery<AttendanceStatus>({
+    queryKey: ['attendance', 'status'],
+    queryFn: async () => {
+      const { cloudBaseUrl } = useConnection.getState()
+      const token = useAuth.getState().token
+      return getAttendanceStatus(cloudBaseUrl, token)
+    },
+    staleTime: 60_000,
+  })
+}
+
+export function useClockIn() {
+  const queryClient = useQueryClient()
+  return useMutation<AttendanceStatus, Error, Coords | null | undefined>({
+    mutationFn: async (coords) => {
+      const { cloudBaseUrl } = useConnection.getState()
+      const token = useAuth.getState().token
+      return clockIn(cloudBaseUrl, token, coords ?? null)
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['attendance', 'status'], data)
+    },
+  })
+}
+
+export function useClockOut() {
+  const queryClient = useQueryClient()
+  return useMutation<AttendanceStatus, Error, Coords | null | undefined>({
+    mutationFn: async (coords) => {
+      const { cloudBaseUrl } = useConnection.getState()
+      const token = useAuth.getState().token
+      return clockOut(cloudBaseUrl, token, coords ?? null)
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['attendance', 'status'], data)
+    },
+  })
+}
+
+export function useAttendanceHistory(from: string, to: string) {
+  return useQuery<AttendanceHistory>({
+    queryKey: ['attendance', 'history', from, to],
+    queryFn: async () => {
+      const { cloudBaseUrl } = useConnection.getState()
+      const token = useAuth.getState().token
+      return getAttendanceHistory(cloudBaseUrl, token, from, to)
+    },
+    staleTime: 60_000,
   })
 }
 

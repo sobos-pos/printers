@@ -150,12 +150,30 @@ class BranchCreateView(SuperAdminAccessMixin, View):
             messages.error(request, "Branch name is required.")
             return redirect('super_admin_dashboard')
 
+        def _parse_float(raw):
+            raw = (raw or '').strip()
+            try:
+                return float(raw) if raw else None
+            except ValueError:
+                return None
+
+        latitude = _parse_float(request.POST.get('latitude'))
+        longitude = _parse_float(request.POST.get('longitude'))
+        radius_raw = (request.POST.get('geofence_radius_m') or '').strip()
+        try:
+            radius = int(radius_raw) if radius_raw else 200
+        except ValueError:
+            radius = 200
+
         try:
             Location.objects.create(
                 restaurant=restaurant,
                 name=name,
                 address=address,
                 timezone=timezone_val,
+                latitude=latitude,
+                longitude=longitude,
+                geofence_radius_m=radius,
                 is_active=True
             )
             messages.success(request, f"Branch '{name}' created successfully.")

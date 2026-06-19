@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('soboss', {
   getPrinters: () => ipcRenderer.invoke('get-printers'),
   getPrinterAssignments: () => ipcRenderer.invoke('get-printer-assignments'),
   savePrinterAssignments: (data: any) => ipcRenderer.invoke('save-printer-assignments', data),
+  clearStuckJobs: () => ipcRenderer.invoke('clear-stuck-jobs'),
+  wipeLocalData: () => ipcRenderer.invoke('wipe-local-data'),
   listOsPrinters: () => ipcRenderer.invoke('list-os-printers'),
   testPrint: (printerName?: string) => ipcRenderer.invoke('test-print', printerName),
   readKotLog: () => ipcRenderer.invoke('read-kot-log'),
@@ -54,6 +56,8 @@ declare global {
       savePrinterAssignments: (data: {
         assignments: Array<{ station_code: string; print_type: string; printer_name: string }>
       }) => Promise<{ saved: number }>
+      clearStuckJobs: () => Promise<{ cleared: number }>
+      wipeLocalData: () => Promise<{ deleted: number }>
       listOsPrinters: () => Promise<Array<{ name: string; isDefault: boolean }>>
       testPrint: (printerName?: string) => Promise<{ ok: boolean; printer: string }>
       readKotLog: () => Promise<string>

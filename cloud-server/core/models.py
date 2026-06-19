@@ -53,6 +53,16 @@ class Location(BaseModel):
     address = models.TextField(blank=True)
     timezone = models.CharField(max_length=40, default='Asia/Kolkata')
     is_active = models.BooleanField(default=True)
+    # Geofence: staff may only clock in within `geofence_radius_m` metres of this
+    # point. Both coordinates null => geofencing disabled for this location (staff
+    # can clock in from anywhere). Configured by a manager in the admin/super-admin.
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    geofence_radius_m = models.PositiveIntegerField(default=200)
+
+    @property
+    def geofence_enabled(self) -> bool:
+        return self.latitude is not None and self.longitude is not None
 
     def __str__(self):
         return f'{self.restaurant.name} — {self.name}'
@@ -104,7 +114,7 @@ class LocationNode(BaseModel):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=['location', 'node_id'], name='uniq_location_node'),
+            models.UniqueConstraint(fields=['node_id'], name='uniq_node_id_global'),
         ]
 
     def __str__(self):
@@ -222,6 +232,33 @@ class SyncLog(BaseModel):
 
     def __str__(self):
         return f'{self.sync_type} {self.direction} → {self.status}'
+
+
+class StaffAttendance(BaseModel):
+    """Tracks waiter/staff clock-in and clock-out times per shift."""
+
+    staff_user = models.ForeignKey(
+        StaffUser, on_delete=models.CASCADE, related_name='attendances'
+    )
+    location = models.ForeignKey(
+        Location, on_delete=models.CASCADE, related_name='attendances', null=True, blank=True
+    )
+    clock_in_at = models.DateTimeField(auto_now_add=True)
+    clock_out_at = models.DateTimeField(null=True, blank=True)
+    # Geolocation captured at clock-in (audit trail for the geofence check) and at
+    # clock-out. distance_m is metres from the location's geofence centre at clock-in.
+    clock_in_lat = models.FloatField(null=True, blank=True)
+    clock_in_lng = models.FloatField(null=True, blank=True)
+    clock_in_distance_m = models.FloatField(null=True, blank=True)
+    clock_out_lat = models.FloatField(null=True, blank=True)
+    clock_out_lng = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-clock_in_at']
+
+    def __str__(self):
+        out = self.clock_out_at.strftime('%H:%M') if self.clock_out_at else 'open'
+        return f'{self.staff_user} {self.clock_in_at.strftime("%Y-%m-%d %H:%M")} → {out}'
 
 
 class NodeConfig(BaseModel):

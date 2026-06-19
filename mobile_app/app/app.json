@@ -38,7 +38,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Soboss Waiter uses your location to confirm you are at the restaurant when you clock in."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

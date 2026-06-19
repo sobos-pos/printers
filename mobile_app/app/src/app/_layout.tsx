@@ -57,6 +57,7 @@ export default function RootLayout() {
           <Stack.Screen name="login" />
           <Stack.Screen name="ordering" />
           <Stack.Screen name="settings" options={{ headerShown: true, title: 'Settings', presentation: 'modal' }} />
+          <Stack.Screen name="profile" options={{ headerShown: true, title: 'Profile' }} />
           <Stack.Screen name="confirm" options={{ headerShown: true, title: 'Order placed' }} />
         </Stack>
       </SafeAreaProvider>
