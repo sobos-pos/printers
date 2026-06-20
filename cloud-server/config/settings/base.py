@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     'user_app',
     'waiter_app',
     'super_admin',
+    'inventory',
 ]
 
 MIDDLEWARE = [
