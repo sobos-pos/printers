@@ -19,3 +19,14 @@ export function login(
 export function fetchMe(cloudBaseUrl: string, token: string): Promise<AuthContext> {
   return request<AuthContext>(cloudBaseUrl, '/api/v1/auth/me/', { token })
 }
+
+/** Mint a fresh staff shift JWT using the current session token (cloud must be reachable). */
+export function refreshStaffToken(
+  cloudBaseUrl: string,
+  sessionToken: string,
+): Promise<{ access_token: string; expires_at: string; expires_in: number }> {
+  return request(cloudBaseUrl, '/api/v1/auth/staff-token/', {
+    method: 'POST',
+    token: sessionToken,
+  })
+}

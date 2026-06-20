@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('soboss', {
   getPrinters: () => ipcRenderer.invoke('get-printers'),
   getPrinterAssignments: () => ipcRenderer.invoke('get-printer-assignments'),
   savePrinterAssignments: (data: any) => ipcRenderer.invoke('save-printer-assignments', data),
+  clearStuckJobs: () => ipcRenderer.invoke('clear-stuck-jobs'),
+  wipeLocalData: () => ipcRenderer.invoke('wipe-local-data'),
   listOsPrinters: () => ipcRenderer.invoke('list-os-printers'),
   testPrint: (printerName?: string) => ipcRenderer.invoke('test-print', printerName),
   readKotLog: () => ipcRenderer.invoke('read-kot-log'),
@@ -22,6 +24,16 @@ contextBridge.exposeInMainWorld('soboss', {
   savePrintRoutes: (data: any) => ipcRenderer.invoke('save-print-routes', data),
   getCloudNodes: () => ipcRenderer.invoke('get-cloud-nodes'),
   getClusterNodes: () => ipcRenderer.invoke('get-cluster-nodes'),
+  refreshClusterNodes: () => ipcRenderer.invoke('refresh-cluster-nodes'),
+  // menu management
+  getMenuGlossary: () => ipcRenderer.invoke('get-menu-glossary'),
+  getMenuTree: () => ipcRenderer.invoke('get-menu-tree'),
+  createMenuCategory: (data: any) => ipcRenderer.invoke('create-menu-category', data),
+  createMenuItem: (data: any) => ipcRenderer.invoke('create-menu-item', data),
+  updateMenuItem: (data: any) => ipcRenderer.invoke('update-menu-item', data),
+  deleteMenuItem: (data: any) => ipcRenderer.invoke('delete-menu-item', data),
+  addMenuItemMedia: (data: any) => ipcRenderer.invoke('add-menu-item-media', data),
+  deleteMenuMedia: (data: any) => ipcRenderer.invoke('delete-menu-media', data),
 })
 
 declare global {
@@ -44,6 +56,8 @@ declare global {
       savePrinterAssignments: (data: {
         assignments: Array<{ station_code: string; print_type: string; printer_name: string }>
       }) => Promise<{ saved: number }>
+      clearStuckJobs: () => Promise<{ cleared: number }>
+      wipeLocalData: () => Promise<{ deleted: number }>
       listOsPrinters: () => Promise<Array<{ name: string; isDefault: boolean }>>
       testPrint: (printerName?: string) => Promise<{ ok: boolean; printer: string }>
       readKotLog: () => Promise<string>
@@ -57,6 +71,15 @@ declare global {
       savePrintRoutes: (data: any) => Promise<any>
       getCloudNodes: () => Promise<any>
       getClusterNodes: () => Promise<any>
+      refreshClusterNodes: () => Promise<any>
+      getMenuGlossary: () => Promise<any>
+      getMenuTree: () => Promise<any>
+      createMenuCategory: (data: any) => Promise<any>
+      createMenuItem: (data: any) => Promise<any>
+      updateMenuItem: (data: any) => Promise<any>
+      deleteMenuItem: (data: any) => Promise<any>
+      addMenuItemMedia: (data: any) => Promise<any>
+      deleteMenuMedia: (data: any) => Promise<any>
     }
   }
 }

@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { runMigrations } from './db/migrate'
+import { getDb } from './db/connection'
 import {
   config,
   isCloudConfigured,
@@ -20,6 +21,8 @@ import { printerRepository } from './repositories/printerRepository'
 import { printRouteRepository } from './repositories/printRouteRepository'
 import { clusterNodeRepository } from './repositories/clusterNodeRepository'
 import { resolvePreloadPath } from './paths'
+import { setMainWindow } from './windowBridge'
+import { getLanIp } from './net'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -36,6 +39,21 @@ async function bootstrapAsync(): Promise<void> {
     // Restore this node's own printer/route config blob from Cloud.
     await nodeConfigService.restoreConfig().catch(() => false)
     upgradeMisconfiguredPrinterDrivers()
+
+    // Back-fill staff-token verification material (Layer 1) for devices
+    // provisioned before this feature, and pick up a rotated secret. Best-effort:
+    // if cloud is unreachable we keep whatever secret we already stored.
+    if (!config.jwtSecret || !config.restaurantId) {
+      const { cloudClient: authClient } = await import('./services/cloudClient')
+      await authClient
+        .fetchAuthMaterial()
+        .then((m) => {
+          nodeConfigRepository.set('restaurant_id', m.restaurant_id)
+          nodeConfigRepository.set('jwt_secret', m.jwt_secret)
+          console.log('[Boot] Fetched staff-auth material')
+        })
+        .catch((err) => console.warn('[Boot] Auth material fetch failed:', err))
+    }
 
     if (config.clusterRole === 'leader') {
       await menuSyncService.bootstrapMenuFromCloud().catch((err) => {
@@ -58,8 +76,11 @@ async function bootstrapAsync(): Promise<void> {
               station_codes: '[]',
               host: n.lan_host ?? '',
               port: n.lan_port ?? 3001,
-              status: n.is_online ? 'ONLINE' : 'OFFLINE',
-              last_health_check: new Date().toISOString(),
+              // Seed metadata only. Status is derived from contact freshness, and
+              // we deliberately do NOT stamp last_health_check here — a seeded node
+              // we haven't actually reached must read OFFLINE until a real heartbeat
+              // or health check arrives. (upsert preserves any genuine prior contact.)
+              status: 'OFFLINE',
             })
           }
           console.log(`[Boot] Seeded ${nodes.length} nodes from Cloud`)
@@ -109,7 +130,10 @@ function createWindow(): void {
     },
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
+    if (mainWindow) setMainWindow(mainWindow)
+  })
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -136,6 +160,7 @@ function registerIpc(): void {
         cloud_base_url: config.cloudBaseUrl,
         cloud_configured: isCloudConfigured(),
         orders_today: orderRepository.countToday(),
+        kots_printed_today: printJobRepository.countPrintedToday(),
         pending_print_jobs:
           printJobRepository.countByStatus('PENDING') +
           printJobRepository.countByStatus('RETRYING'),
@@ -163,6 +188,32 @@ function registerIpc(): void {
 
   ipcMain.handle('become-active', async () => {
     const { clusterService } = await import('./services/clusterService')
+
+    // Force-promotion MUST claim the cloud lease first. Otherwise we only flip
+    // the local role to leader, and the very next cloud heartbeat (is_active=true)
+    // fails to claim — the old leader still holds a fresh lease — so the cloud
+    // resolves our role back to 'follower' and heartbeatWorker demotes us within
+    // one heartbeat interval. force=true overrides a live lease and demotes the
+    // previous holder in the same transaction, making the promotion durable.
+    if (isCloudConfigured()) {
+      try {
+        const { cloudClient } = await import('./services/cloudClient')
+        const result = await cloudClient.claimActive(true)
+        if (!result.granted) {
+          return { granted: false, reason: JSON.stringify(result.detail) }
+        }
+      } catch (err) {
+        // Cloud unreachable — fall back to a local-only promotion so a LAN
+        // island can still elect a leader. The cloud reconciles on reconnect
+        // (if the real leader is alive it reclaims; if it's down our next
+        // is_active heartbeat claims the now-expired lease).
+        console.warn(
+          '[Promote] Cloud lease claim failed, promoting locally only:',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+
     clusterService.switchToLeader()
     return { granted: true }
   })
@@ -184,17 +235,7 @@ function registerIpc(): void {
     const { cloudClient } = await import('./services/cloudClient')
     const data = await cloudClient.reconnectNode(sessionToken, nodeId)
 
-    const os = await import('os')
-    const nets = os.networkInterfaces()
-    let lanHost = '127.0.0.1'
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          lanHost = net.address
-          break
-        }
-      }
-    }
+    const lanHost = getLanIp()
 
     nodeConfigRepository.set('location_id', data.location.id)
     nodeConfigRepository.set('cloud_api_key', data.api_key.replace(/^sk_live_/, ''))
@@ -203,6 +244,9 @@ function registerIpc(): void {
     nodeConfigRepository.set('node_label', data.node_name)
     nodeConfigRepository.set('manager_email', managerEmail || '')
     nodeConfigRepository.set('lan_host', lanHost)
+    // Device auth material for verifying staff JWTs offline (Layer 1 → Layer 2).
+    if (data.restaurant_id) nodeConfigRepository.set('restaurant_id', data.restaurant_id)
+    if (data.jwt_secret) nodeConfigRepository.set('jwt_secret', data.jwt_secret)
 
     workerManager.startWorkers(data.cluster_role as 'leader' | 'follower')
     return data
@@ -244,15 +288,102 @@ function registerIpc(): void {
     return result
   })
 
+  // ── Menu management (cloud is the source of truth) ──────────────────────
+  // Reads proxy straight to cloud; writes go to cloud (which bumps the menu
+  // version) and then force a local cache refresh so this node serves the
+  // updated menu immediately instead of waiting for the next poll tick.
+  const refreshMenuCache = async () => {
+    try {
+      await menuSyncService.fetchAndCacheMenu(0)
+    } catch (err) {
+      console.warn('[Menu] cache refresh after write failed:', err)
+    }
+  }
+
+  ipcMain.handle('get-menu-glossary', async () => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.fetchMenuGlossary()
+  })
+
+  ipcMain.handle('get-menu-tree', async () => {
+    const { cloudClient } = await import('./services/cloudClient')
+    return cloudClient.fetchMenuTree()
+  })
+
+  ipcMain.handle('create-menu-category', async (_e, payload) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.createMenuCategory(payload)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('create-menu-item', async (_e, payload) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.createMenuItem(payload)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('update-menu-item', async (_e, { itemId, ...payload }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.updateMenuItem(itemId, payload)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('delete-menu-item', async (_e, { itemId }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.deleteMenuItem(itemId)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('add-menu-item-media', async (_e, { itemId, image }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.addMenuItemMedia(itemId, image)
+    await refreshMenuCache()
+    return result
+  })
+
+  ipcMain.handle('delete-menu-media', async (_e, { mediaId }) => {
+    const { cloudClient } = await import('./services/cloudClient')
+    const result = await cloudClient.deleteMenuMedia(mediaId)
+    await refreshMenuCache()
+    return result
+  })
+
   // Cloud node inventory (Api-Key authed) — includes offline/never-connected nodes
   ipcMain.handle('get-cloud-nodes', async () => {
     const { cloudClient } = await import('./services/cloudClient')
     return cloudClient.fetchNodesByApiKey()
   })
 
-  // Local cluster_nodes view (heartbeat-populated) — kept for diagnostics
+  // Local cluster_nodes view — the leader's authoritative follower status, shown
+  // in Node Management. status is derived from contact freshness (not the stored
+  // flag) so it's always live: ONLINE only with recent contact, else OFFLINE.
   ipcMain.handle('get-cluster-nodes', () => {
-    return { nodes: clusterNodeRepository.listAll() }
+    const nodes = clusterNodeRepository.listAll().map((n) => ({
+      ...n,
+      status: clusterNodeRepository.isOnline(n) ? 'ONLINE' : 'OFFLINE',
+    }))
+    return { nodes }
+  })
+
+  // Manual refresh: run an immediate identity-verified health-check round so the
+  // UI reflects real current state right away instead of waiting for the next
+  // scheduled tick. Only the leader probes; followers just re-render.
+  ipcMain.handle('refresh-cluster-nodes', async () => {
+    if (config.clusterRole === 'leader') {
+      const { clusterService } = await import('./services/clusterService')
+      await clusterService.runFollowerHealthChecks().catch((err) =>
+        console.warn('[Refresh] health check round failed:', err),
+      )
+    }
+    const nodes = clusterNodeRepository.listAll().map((n) => ({
+      ...n,
+      status: clusterNodeRepository.isOnline(n) ? 'ONLINE' : 'OFFLINE',
+    }))
+    return { nodes }
   })
 
   ipcMain.handle('clear-config', async () => {
@@ -276,6 +407,9 @@ function registerIpc(): void {
     nodeConfigRepository.delete('leader_port')
     nodeConfigRepository.delete('leader_status')
     nodeConfigRepository.delete('manager_email')
+    // Decommission must not leave the staff-token secret on the device.
+    nodeConfigRepository.delete('restaurant_id')
+    nodeConfigRepository.delete('jwt_secret')
 
     workerManager.stopAllWorkers()
     return { ok: true }
@@ -307,9 +441,47 @@ function registerIpc(): void {
     return { saved }
   })
 
+  ipcMain.handle('clear-stuck-jobs', () => {
+    // Expires ALL pending/retrying jobs regardless of age — used to manually
+    // clear a backlog built up while a printer was offline.
+    const cleared = printJobRepository.expireStaleJobs(0)
+    return { cleared }
+  })
+
+  ipcMain.handle('wipe-local-data', () => {
+    // Wipes all operational data from the local SQLite database while keeping
+    // node_config intact (so the node stays connected to Cloud after the wipe).
+    // Used after a full cloud wipe to start fresh without needing to re-run
+    // the Setup Wizard.
+    workerManager.stopAllWorkers()
+    const db = getDb()
+    const tables = [
+      'remote_print_jobs',
+      'cluster_nodes',
+      'node_state',
+      'print_routes',
+      'printers',
+      'menu_cache',
+      'sync_cursor',
+      'sync_log',
+      'print_jobs',
+      'orders', // cascades order_items and order_item_modifiers
+    ]
+    let totalDeleted = 0
+    for (const t of tables) {
+      const result = db.prepare(`DELETE FROM ${t}`).run() as { changes: number }
+      totalDeleted += result.changes
+    }
+    // Restart workers so the node resumes printing / heartbeat immediately.
+    if (isCloudConfigured()) {
+      workerManager.bootFromState()
+    }
+    return { deleted: totalDeleted }
+  })
+
   ipcMain.handle('list-os-printers', async () => {
     const { listOsPrintersAsync } = await import('./services/printerDiscovery')
-    return listOsPrintersAsync()
+    return listOsPrintersAsync({ includeHardwareStatus: true })
   })
 
   ipcMain.handle('test-print', async (_e, printerName?: string) => {

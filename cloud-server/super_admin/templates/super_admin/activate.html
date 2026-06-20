@@ -1,0 +1,57 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Activate Staff Account — Soboss</title>
+    <link rel="stylesheet" href="{% static 'super_admin/css/style.css' %}">
+</head>
+<body>
+    <div class="auth-wrapper">
+        <div class="glass-panel auth-card">
+            <h1 class="auth-logo">Activate Account</h1>
+            <p class="auth-subtitle">Verify your temporary password to activate your staff profile</p>
+
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 12px; padding: 1rem; margin-bottom: 1.5rem;">
+                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                    <strong>Email:</strong> {{ email }}
+                </p>
+                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                    <strong>Branch (Location):</strong> {{ branch }}
+                </p>
+                <p style="font-size: 0.9rem; color: var(--text-secondary);">
+                    <strong>Role:</strong> {{ role }}
+                </p>
+            </div>
+
+            {% if messages %}
+                <ul class="messages">
+                    {% for message in messages %}
+                        <li class="alert {% if message.tags %}alert-{{ message.tags }}{% endif %}">
+                            {{ message }}
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label class="form-label" for="username">Username</label>
+                    <input class="form-control" type="text" id="username" name="username" value="{{ username }}" readonly style="background: rgba(255, 255, 255, 0.01); color: var(--text-muted); cursor: not-allowed;">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="password">Temporary Password</label>
+                    <input class="form-control" type="password" id="password" name="password" required placeholder="enter temporary password" autofocus>
+                </div>
+
+                <button class="btn btn-cyan" type="submit" style="width: 100%; margin-top: 1rem;">
+                    Verify & Activate Profile
+                </button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

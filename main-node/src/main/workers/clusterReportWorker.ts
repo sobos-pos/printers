@@ -1,24 +1,10 @@
-import os from 'os'
 import { config, isCloudConfigured } from '../config'
 import { cloudClient } from '../services/cloudClient'
 import { clusterNodeRepository } from '../repositories/clusterNodeRepository'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
-
-const REPORT_INTERVAL_MS = 15000
+import { getLanIp } from '../net'
 
 let timer: ReturnType<typeof setInterval> | null = null
-
-function getLocalIp(): string {
-  const nets = os.networkInterfaces()
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address
-      }
-    }
-  }
-  return '127.0.0.1'
-}
 
 export const clusterReportWorker = {
   start(): void {
@@ -42,7 +28,9 @@ export const clusterReportWorker = {
             cluster_role: 'follower',
             lan_host: n.host,
             lan_port: n.port,
-            status: n.status,
+            // Derive from contact freshness so the cloud mirror matches the
+            // leader's live view — never the stale stored flag.
+            status: clusterNodeRepository.isOnline(n) ? 'ONLINE' : 'OFFLINE',
             last_seen: n.last_health_check,
           }))
 
@@ -50,7 +38,7 @@ export const clusterReportWorker = {
           node_id: config.nodeId,
           node_label: nodeConfigRepository.get('node_label') || '',
           cluster_role: 'leader',
-          lan_host: getLocalIp(),
+          lan_host: getLanIp(),
           lan_port: config.localApiPort,
           status: 'ONLINE',
           last_seen: now,
@@ -62,13 +50,21 @@ export const clusterReportWorker = {
         })
         void result
       } catch (err) {
-        console.warn('[ClusterReport]', err instanceof Error ? err.message : err)
+        const msg = err instanceof Error ? err.message : String(err)
+        // 409 = the cloud lease is held by another node, so we're not the
+        // authoritative leader (yet). Expected briefly at boot before the cloud
+        // heartbeat reconciles our role — not an error, so don't alarm.
+        if (msg.includes('409')) {
+          console.log('[ClusterReport] Skipped — not the active leader yet (lease held elsewhere)')
+          return
+        }
+        console.warn('[ClusterReport]', msg)
       }
     }
 
     tick()
-    timer = setInterval(tick, REPORT_INTERVAL_MS)
-    console.log(`[ClusterReportWorker] Started (${REPORT_INTERVAL_MS}ms)`)
+    timer = setInterval(tick, config.clusterReportMs)
+    console.log(`[ClusterReportWorker] Started (${config.clusterReportMs}ms)`)
   },
 
   stop(): void {

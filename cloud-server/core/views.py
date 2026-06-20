@@ -1,7 +1,7 @@
 import json
 import logging
 
-from django.db import connection
+from django.db import connection, models
 from django.http import JsonResponse
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
@@ -22,12 +22,17 @@ ONLINE_FRESHNESS_SECONDS = 90
 
 
 def is_node_fresh(node, now=None) -> bool:
-    """Derive online status from freshness instead of the stored is_online flag.
+    """Derive online status from freshness AND the stored is_online flag.
 
-    The leader's liveness comes from its own cloud heartbeat (last_heartbeat_at);
-    a follower's liveness comes from the leader's consolidated snapshot
-    (cluster_reported_at). This avoids the 'stuck Online' bug when no sweep runs.
+    An explicit is_online=False (set by markOffline / clear-config) always wins,
+    so nodes are immediately reclaimable in the setup wizard after a clean logout.
+    Otherwise freshness is derived from the heartbeat timestamp so crashed nodes
+    (which never send an offline signal) go stale after ONLINE_FRESHNESS_SECONDS.
     """
+    # Explicit offline signal takes priority over any cached timestamp.
+    if not node.is_online:
+        return False
+
     from django.utils import timezone as _tz
 
     now = now or _tz.now()
@@ -128,12 +133,21 @@ class SyncOrderStatusView(View):
         if fence:
             return fence
         data = json.loads(request.body)
-        order = SyncService.apply_status_push(
-            order_uuid=str(order_uuid),
-            new_status=data['status'],
-            occurred_at=data.get('occurred_at'),
-            idempotency_key=request.headers.get('Idempotency-Key', ''),
-        )
+        try:
+            order = SyncService.apply_status_push(
+                order_uuid=str(order_uuid),
+                new_status=data['status'],
+                occurred_at=data.get('occurred_at'),
+                idempotency_key=request.headers.get('Idempotency-Key', ''),
+            )
+        except Exception as exc:
+            from django.core.exceptions import ObjectDoesNotExist
+            if isinstance(exc, ObjectDoesNotExist) or 'DoesNotExist' in type(exc).__name__:
+                return JsonResponse(
+                    {'error': {'code': 'NOT_FOUND', 'message': 'Order not found on cloud — it may not have synced yet'}},
+                    status=404,
+                )
+            raise
         from orders.serializers import serialize_order
 
         return JsonResponse(serialize_order(order))
@@ -362,10 +376,24 @@ def get_session_user(request):
         session = SessionStore(session_key=session_key)
         user_id = session.get('_auth_user_id')
         if user_id:
-            return StaffUser.objects.get(pk=user_id)
+            user = StaffUser.objects.select_related('location', 'restaurant').get(pk=user_id)
+            if user.is_active:
+                return user
     except Exception:
         pass
     return None
+
+
+def _serialize_location(loc) -> dict:
+    """Location summary including geofence config so the app can pre-check clock-in
+    range locally. The server still re-validates on clock-in — this is UX only."""
+    return {
+        'id': str(loc.id),
+        'name': loc.name,
+        'latitude': loc.latitude,
+        'longitude': loc.longitude,
+        'geofence_radius_m': loc.geofence_radius_m,
+    }
 
 
 def serialize_user_context(user) -> dict:
@@ -373,18 +401,24 @@ def serialize_user_context(user) -> dict:
     restaurant = user.restaurant
     restaurants = []
     if restaurant:
+        if user.location:
+            locations = [user.location]
+        else:
+            locations = list(restaurant.locations.all())
         restaurants.append({
             'id': str(restaurant.id),
             'name': restaurant.name,
-            'locations': [
-                {'id': str(loc.id), 'name': loc.name}
-                for loc in restaurant.locations.all()
-            ],
+            'locations': [_serialize_location(loc) for loc in locations],
         })
     return {
         'user': {
             'name': user.get_full_name() or user.username,
+            'username': user.username,
+            'email': user.email,
             'role': user.role,
+            'location': (
+                _serialize_location(user.location) if user.location else None
+            ),
         },
         'restaurants': restaurants,
     }
@@ -411,7 +445,7 @@ class AuthLoginView(View):
             return JsonResponse({'error': 'Invalid credentials'}, status=401)
 
         authenticated_user = authenticate(username=user.username, password=password)
-        if authenticated_user is None:
+        if authenticated_user is None or not authenticated_user.is_active:
             return JsonResponse({'error': 'Invalid credentials'}, status=401)
 
         login(request, authenticated_user)
@@ -422,8 +456,21 @@ class AuthLoginView(View):
 
         return JsonResponse({
             'session_token': f'tok_{session_token}',
+            # Layer-2 staff "shift" JWT for offline use against Electron devices.
+            # Absent only if the user has no restaurant (e.g. a superuser).
+            **_staff_token_block(authenticated_user),
             **serialize_user_context(authenticated_user),
         })
+
+
+def _staff_token_block(user) -> dict:
+    """Best-effort staff JWT block for the login/refresh responses."""
+    from core.services.staff_token_service import StaffTokenError, mint_staff_token
+
+    try:
+        return mint_staff_token(user)
+    except StaffTokenError:
+        return {}
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -439,6 +486,68 @@ class AuthMeView(View):
         if user is None:
             return JsonResponse({'error': 'Invalid or expired token'}, status=401)
         return JsonResponse(serialize_user_context(user))
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AuthLogoutView(View):
+    """POST /api/v1/auth/logout/ — invalidate the current Bearer session token."""
+
+    def post(self, request):
+        from django.contrib.auth import logout
+        from django.contrib.sessions.backends.db import SessionStore
+
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer tok_'):
+            session_key = auth_header[len('Bearer tok_'):]
+            try:
+                session = SessionStore(session_key=session_key)
+                session.flush()
+            except Exception:
+                pass
+        logout(request)
+        return JsonResponse({'ok': True})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AuthStaffTokenView(View):
+    """POST /api/v1/auth/staff-token/ — mint a fresh staff shift JWT.
+
+    Used by the mobile client to silently refresh an expired/expiring token when
+    internet is available, without re-entering the password. Authenticated by
+    the existing manager/staff session Bearer token (tok_…)."""
+
+    def post(self, request):
+        user = get_session_user(request)
+        if user is None:
+            return JsonResponse({'error': 'Invalid or expired session'}, status=401)
+
+        from core.services.staff_token_service import StaffTokenError, mint_staff_token
+
+        try:
+            return JsonResponse(mint_staff_token(user))
+        except StaffTokenError as exc:
+            return JsonResponse({'error': str(exc)}, status=400)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class SyncAuthMaterialView(View):
+    """GET /api/v1/sync/auth-material/ — a provisioned node fetches the shared
+    staff-token verification material for its restaurant.
+
+    Authenticated by the node's own Api-Key. Lets an already-paired device pick
+    up the secret (or a rotated one) without re-running the Setup Wizard."""
+
+    def get(self, request):
+        node, err = get_auth(request)
+        if err:
+            return err
+        restaurant = node.location.restaurant
+        if not restaurant.jwt_signing_secret:
+            restaurant.rotate_jwt_secret()
+        return JsonResponse({
+            'restaurant_id': str(restaurant.id),
+            'jwt_secret': restaurant.jwt_signing_secret,
+        })
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -464,7 +573,7 @@ class SyncNodesCreateView(View):
 
         node = LocationNode.objects.create(
             location=location,
-            node_id=f"node-{uuid.uuid4().hex[:8]}",
+            node_id=f"node-{uuid.uuid4().hex[:16]}",
             node_label=node_name,
             cluster_role='follower',
             is_online=False,
@@ -502,9 +611,13 @@ class AuthReconnectNodeView(View):
         import secrets
         from core.authentication import hash_api_key
 
-        try:
-            node = LocationNode.objects.select_related('location__restaurant').get(node_id=node_id)
-        except LocationNode.DoesNotExist:
+        node = (
+            LocationNode.objects.select_related('location__restaurant')
+            .filter(node_id=node_id)
+            .order_by('-created_at')
+            .first()
+        )
+        if node is None:
             return JsonResponse({'error': 'Node not found'}, status=404)
 
         if user.restaurant != node.location.restaurant:
@@ -517,6 +630,10 @@ class AuthReconnectNodeView(View):
         node.is_online = True
         node.save(update_fields=['api_key_hash', 'is_online', 'updated_at'])
 
+        restaurant = node.location.restaurant
+        if not restaurant.jwt_signing_secret:
+            restaurant.rotate_jwt_secret()
+
         return JsonResponse({
             'node_id': node.node_id,
             'api_key': f'sk_live_{raw_key}',
@@ -526,6 +643,250 @@ class AuthReconnectNodeView(View):
                 'id': str(node.location.id),
                 'name': node.location.name,
             },
+            # Device auth material (Layer 1 → enables Layer 2 offline verification).
+            'restaurant_id': str(restaurant.id),
+            'jwt_secret': restaurant.jwt_signing_secret,
+        })
+
+
+def _serialize_attendance(att) -> dict:
+    return {
+        'clocked_in': att.clock_out_at is None,
+        'shift_id': str(att.id),
+        'clock_in_at': att.clock_in_at.isoformat(),
+        'clock_out_at': att.clock_out_at.isoformat() if att.clock_out_at else None,
+    }
+
+
+def _haversine_m(lat1, lng1, lat2, lng2) -> float:
+    """Great-circle distance between two WGS-84 points, in metres."""
+    import math
+    r = 6371000.0  # Earth radius (m)
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
+    )
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _read_coords(request):
+    """Pull (lat, lng) floats from a JSON body, or (None, None) if absent/invalid."""
+    try:
+        data = json.loads(request.body or '{}')
+    except (ValueError, TypeError):
+        return None, None
+    lat, lng = data.get('latitude'), data.get('longitude')
+    try:
+        return (float(lat), float(lng)) if lat is not None and lng is not None else (None, None)
+    except (TypeError, ValueError):
+        return None, None
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AttendanceStatusView(View):
+    """GET /api/v1/attendance/status/ — return the caller's current open shift, or not-clocked-in."""
+
+    def get(self, request):
+        user = get_session_user(request)
+        if user is None:
+            return JsonResponse(
+                {'error': {'code': 'UNAUTHORIZED', 'message': 'Login required'}}, status=401
+            )
+        from core.models import StaffAttendance
+        open_shift = StaffAttendance.objects.filter(
+            staff_user=user, clock_out_at__isnull=True
+        ).first()
+        if open_shift is None:
+            return JsonResponse({'clocked_in': False, 'shift_id': None, 'clock_in_at': None})
+        return JsonResponse(_serialize_attendance(open_shift))
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AttendanceClockInView(View):
+    """POST /api/v1/attendance/clock-in/ — open a new shift for the authenticated user.
+
+    Body (optional): {latitude, longitude}. When the user's location has a geofence
+    configured, coordinates are REQUIRED and must fall within geofence_radius_m of
+    the location's centre — this is enforced server-side regardless of any client
+    pre-check, so a tampered client cannot bypass it.
+    """
+
+    def post(self, request):
+        user = get_session_user(request)
+        if user is None:
+            return JsonResponse(
+                {'error': {'code': 'UNAUTHORIZED', 'message': 'Login required'}}, status=401
+            )
+        from core.models import StaffAttendance
+        if StaffAttendance.objects.filter(staff_user=user, clock_out_at__isnull=True).exists():
+            return JsonResponse(
+                {'error': {'code': 'ALREADY_CLOCKED_IN', 'message': 'Already clocked in'}},
+                status=409,
+            )
+
+        lat, lng = _read_coords(request)
+        loc = user.location
+        distance = None
+        if loc is not None and loc.geofence_enabled:
+            if lat is None or lng is None:
+                return JsonResponse(
+                    {'error': {
+                        'code': 'LOCATION_REQUIRED',
+                        'message': 'Location is required to clock in here. Enable location and try again.',
+                    }},
+                    status=422,
+                )
+            distance = _haversine_m(lat, lng, loc.latitude, loc.longitude)
+            if distance > loc.geofence_radius_m:
+                return JsonResponse(
+                    {'error': {
+                        'code': 'OUTSIDE_GEOFENCE',
+                        'message': (
+                            f'You are {int(round(distance))} m away. You must be within '
+                            f'{loc.geofence_radius_m} m of {loc.name} to clock in.'
+                        ),
+                        'distance_m': round(distance, 1),
+                        'radius_m': loc.geofence_radius_m,
+                    }},
+                    status=403,
+                )
+
+        att = StaffAttendance.objects.create(
+            staff_user=user,
+            location=loc,
+            clock_in_lat=lat,
+            clock_in_lng=lng,
+            clock_in_distance_m=distance,
+        )
+        return JsonResponse(_serialize_attendance(att), status=201)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AttendanceClockOutView(View):
+    """POST /api/v1/attendance/clock-out/ — close the caller's open shift.
+
+    Body (optional): {latitude, longitude} — recorded for the audit trail. Clock-out
+    is never geofenced (staff must always be able to end a shift)."""
+
+    def post(self, request):
+        user = get_session_user(request)
+        if user is None:
+            return JsonResponse(
+                {'error': {'code': 'UNAUTHORIZED', 'message': 'Login required'}}, status=401
+            )
+        from django.utils import timezone
+        from core.models import StaffAttendance
+        open_shift = StaffAttendance.objects.filter(
+            staff_user=user, clock_out_at__isnull=True
+        ).first()
+        if open_shift is None:
+            return JsonResponse(
+                {'error': {'code': 'NOT_CLOCKED_IN', 'message': 'Not clocked in'}}, status=409
+            )
+        lat, lng = _read_coords(request)
+        open_shift.clock_out_at = timezone.now()
+        open_shift.clock_out_lat = lat
+        open_shift.clock_out_lng = lng
+        open_shift.save(update_fields=[
+            'clock_out_at', 'clock_out_lat', 'clock_out_lng', 'updated_at',
+        ])
+        return JsonResponse(_serialize_attendance(open_shift))
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AttendanceHistoryView(View):
+    """GET /api/v1/attendance/history/?from=YYYY-MM-DD&to=YYYY-MM-DD
+
+    Returns per-day worked minutes for the authenticated user, aggregated in the
+    location's local timezone (defaults to the project TZ). Powers the profile
+    heatmap. An open shift counts up to 'now'. Range is clamped to 400 days."""
+
+    def get(self, request):
+        user = get_session_user(request)
+        if user is None:
+            return JsonResponse(
+                {'error': {'code': 'UNAUTHORIZED', 'message': 'Login required'}}, status=401
+            )
+
+        from datetime import date, datetime, timedelta
+        from zoneinfo import ZoneInfo
+        from django.conf import settings
+        from django.utils import timezone
+        from core.models import StaffAttendance
+
+        def parse_day(value, fallback):
+            try:
+                return datetime.strptime(value, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                return fallback
+
+        today = timezone.localdate()
+        start = parse_day(request.GET.get('from'), today.replace(day=1))
+        end = parse_day(request.GET.get('to'), today)
+        if end < start:
+            start, end = end, start
+        if (end - start).days > 400:
+            start = end - timedelta(days=400)
+
+        tz_name = getattr(getattr(user, 'location', None), 'timezone', None) or settings.TIME_ZONE
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo(settings.TIME_ZONE)
+
+        # Pull shifts overlapping [start 00:00 local, end 23:59 local].
+        range_start = datetime.combine(start, datetime.min.time(), tzinfo=tz)
+        range_end = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+        now = timezone.now()
+
+        shifts = StaffAttendance.objects.filter(
+            staff_user=user, clock_in_at__lt=range_end,
+        ).filter(
+            models.Q(clock_out_at__isnull=True) | models.Q(clock_out_at__gte=range_start)
+        ).values_list('clock_in_at', 'clock_out_at')
+
+        # Aggregate minutes per local calendar day, splitting shifts that cross midnight.
+        minutes_by_day: dict[str, float] = {}
+        shifts_by_day: dict[str, int] = {}
+        for clock_in, clock_out in shifts:
+            seg_start = clock_in.astimezone(tz)
+            seg_end = (clock_out or now).astimezone(tz)
+            if seg_end <= seg_start:
+                continue
+            day = seg_start.date()
+            shifts_by_day[day.isoformat()] = shifts_by_day.get(day.isoformat(), 0) + 1
+            cursor = seg_start
+            # Walk day-by-day so a shift spanning midnight is credited to each day.
+            while cursor < seg_end:
+                day_end = datetime.combine(
+                    cursor.date() + timedelta(days=1), datetime.min.time(), tzinfo=tz
+                )
+                chunk_end = min(seg_end, day_end)
+                key = cursor.date().isoformat()
+                if start <= cursor.date() <= end:
+                    minutes_by_day[key] = (
+                        minutes_by_day.get(key, 0.0)
+                        + (chunk_end - cursor).total_seconds() / 60.0
+                    )
+                cursor = chunk_end
+
+        days = [
+            {
+                'date': d,
+                'minutes': int(round(minutes_by_day[d])),
+                'shifts': shifts_by_day.get(d, 0),
+            }
+            for d in sorted(minutes_by_day.keys())
+        ]
+        return JsonResponse({
+            'from': start.isoformat(),
+            'to': end.isoformat(),
+            'days': days,
+            'total_minutes': int(round(sum(minutes_by_day.values()))),
+            'total_days': len([d for d in days if d['minutes'] > 0]),
         })
 
 
@@ -609,7 +970,7 @@ class SyncPrintRoutesView(View):
                 'print_type': r.print_type,
                 'assigned_node_id': node.node_id if node else None,
                 'assigned_node_name': node.node_label if node else None,
-                'node_is_online': node.is_online if node else None,
+                'node_is_online': is_node_fresh(node) if node else None,
             })
 
         return JsonResponse({

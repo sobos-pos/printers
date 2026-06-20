@@ -55,9 +55,11 @@ function cleanupTmp(printer: ThermalPrinter): void {
   }
 }
 
-export function formatKotEscPos(payload: KotPrintPayload, paperWidth: PaperWidth = '58mm'): Buffer {
-  const printer = createBufferPrinter(paperWidth)
+function money(n: number): string {
+  return n.toFixed(2)
+}
 
+function formatKotTicket(printer: ThermalPrinter, payload: KotPrintPayload): void {
   printer.alignCenter()
   printer.bold(true)
   printer.println('KITCHEN ORDER')
@@ -66,6 +68,7 @@ export function formatKotEscPos(payload: KotPrintPayload, paperWidth: PaperWidth
 
   printer.alignLeft()
   printer.leftRight(`Station: ${payload.station}`, `Time: ${formatTime(payload.placed_at)}`)
+  printer.println(`Type: ${(payload.job_type ?? 'KOT').toUpperCase()}`)
   if (payload.table) printer.println(`Table: ${payload.table}`)
   if (payload.order_id) printer.println(`Order: ${payload.order_id.slice(0, 8)}`)
   printer.drawLine('-')
@@ -80,6 +83,47 @@ export function formatKotEscPos(payload: KotPrintPayload, paperWidth: PaperWidth
 
   printer.drawLine()
   printer.cut()
+}
+
+function formatBillReceipt(printer: ThermalPrinter, payload: KotPrintPayload): void {
+  printer.alignCenter()
+  printer.bold(true)
+  printer.println('BILL')
+  printer.bold(false)
+  printer.println(`${payload.station} station`)
+  printer.drawLine()
+
+  printer.alignLeft()
+  printer.leftRight(`Time: ${formatTime(payload.placed_at)}`, '')
+  printer.println(`Type: ${(payload.job_type ?? 'BILL').toUpperCase()}`)
+  if (payload.table) printer.println(`Table: ${payload.table}`)
+  if (payload.order_id) printer.println(`Order: ${payload.order_id.slice(0, 8)}`)
+  printer.drawLine('-')
+
+  let total = 0
+  for (const line of payload.lines) {
+    const amount = line.qty * (line.unit_price ?? 0)
+    total += amount
+    printer.leftRight(`${line.qty}x ${line.name}`, money(amount))
+    if (line.mods.length) printer.println(`   + ${line.mods.join(', ')}`)
+  }
+
+  printer.drawLine('-')
+  printer.bold(true)
+  printer.leftRight('TOTAL', money(total))
+  printer.bold(false)
+  printer.drawLine()
+  printer.cut()
+}
+
+export function formatKotEscPos(payload: KotPrintPayload, paperWidth: PaperWidth = '58mm'): Buffer {
+  const printer = createBufferPrinter(paperWidth)
+
+  if ((payload.job_type ?? 'KOT').toUpperCase() === 'BILL') {
+    formatBillReceipt(printer, payload)
+  } else {
+    formatKotTicket(printer, payload)
+  }
 
   try {
     return readRawBuffer(printer)

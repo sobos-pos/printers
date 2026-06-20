@@ -3,7 +3,7 @@ import { config } from '../config'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
 import { printerRepository } from '../repositories/printerRepository'
 import { cloudClient } from './cloudClient'
-import { listOsPrintersAsync } from './printerDiscovery'
+import { listOsPrintersAsync, type OsPrinterInfo } from './printerDiscovery'
 import { nodeConfigService } from './nodeConfigService'
 
 export interface NodePrinterAssignment {
@@ -25,19 +25,24 @@ function isRouteForThisNode(
   nodeId: string,
   clusterRole: string,
 ): boolean {
+  // A node maps printers for stations routed to it. The leader is additionally
+  // the universal fallback — it may have to print ANY station when the assigned
+  // follower is offline (or a station is unassigned) — so it gets a mapping slot
+  // for every route, letting a multi-printer leader pick the right printer per
+  // station/type instead of dumping every fallback onto one printer.
   if (assignedNodeId === nodeId) return true
-  return clusterRole === 'leader' && !assignedNodeId
+  return clusterRole === 'leader'
 }
 
 export const printerConfigService = {
   async getAssignments(): Promise<{
     assignments: NodePrinterAssignment[]
-    os_printers: Array<{ name: string; isDefault: boolean }>
+    os_printers: OsPrinterInfo[]
   }> {
     const [{ routes }, localRoutes, osPrinters] = await Promise.all([
       cloudClient.fetchPrintRoutes(),
       Promise.resolve(printerRepository.getAllRoutes()),
-      listOsPrintersAsync(),
+      listOsPrintersAsync({ includeHardwareStatus: true }),
     ])
 
     const localPrinters = printerRepository.getAllPrinters()
@@ -54,7 +59,9 @@ export const printerConfigService = {
           station_code: r.station_code,
           station_name: r.station_name,
           print_type: r.print_type,
-          scope: r.assigned_node_id ? ('assigned' as const) : ('leader_fallback' as const),
+          // 'assigned' = this node is the routed target; 'leader_fallback' = this
+          // leader prints it only when the assigned follower is offline/unassigned.
+          scope: r.assigned_node_id === config.nodeId ? ('assigned' as const) : ('leader_fallback' as const),
           printer_id: local?.printer_id ?? null,
           printer_name: printer?.name ?? null,
         }

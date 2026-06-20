@@ -11,8 +11,12 @@ class RestaurantAdmin(admin.ModelAdmin):
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ['name', 'restaurant', 'is_active']
+    list_display = ['name', 'restaurant', 'is_active', 'latitude', 'longitude', 'geofence_radius_m']
     list_select_related = ['restaurant']
+    fields = [
+        'restaurant', 'name', 'address', 'timezone', 'is_active',
+        'latitude', 'longitude', 'geofence_radius_m',
+    ]
 
 
 @admin.register(LocationNode)
@@ -30,9 +34,9 @@ class LocationLeaseAdmin(admin.ModelAdmin):
 
 @admin.register(StaffUser)
 class StaffUserAdmin(UserAdmin):
-    list_display = ['username', 'email', 'restaurant', 'role', 'is_staff']
+    list_display = ['username', 'email', 'restaurant', 'location', 'role', 'is_staff']
     fieldsets = UserAdmin.fieldsets + (
-        ('Restaurant Details', {'fields': ('restaurant', 'role')}),
+        ('Restaurant Details', {'fields': ('restaurant', 'location', 'role')}),
     )
 
 

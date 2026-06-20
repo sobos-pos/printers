@@ -6,8 +6,8 @@
  */
 
 const BASE = process.env.CLOUD_BASE_URL || 'http://localhost:8000'
-const EMAIL = 'manager@biryani.com'
-const PASSWORD = 'password123'
+const EMAIL = 'manager.indira@copperpot.demo'
+const PASSWORD = 'SobossDemo26!'
 
 async function jsonFetch(path: string, init?: RequestInit) {
   const res = await fetch(`${BASE}${path}`, init)

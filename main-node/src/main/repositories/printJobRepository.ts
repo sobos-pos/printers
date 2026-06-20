@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid'
-import { getDb, nowIso } from '../db/connection'
+import { getDb, istTodayRange, nowIso } from '../db/connection'
 import type { PrintJobRow } from '../types'
 
 export const printJobRepository = {
@@ -48,6 +48,16 @@ export const printJobRepository = {
       .run(nowIso(), id)
   },
 
+  // Terminal status for a job handed off to a follower node. Distinct from
+  // PRINTED so "KOTs printed today" counts only what THIS node printed locally
+  // (the follower that prints it records its own PRINTED entry). Like PRINTED,
+  // it's excluded from getDueJobs so it is never re-processed.
+  markForwarded(id: string): void {
+    getDb()
+      .prepare(`UPDATE print_jobs SET status = 'FORWARDED', updated_at = ?, last_error = NULL WHERE id = ?`)
+      .run(nowIso(), id)
+  },
+
   markRetrying(id: string, attemptCount: number, nextRetryAt: string, error: string): void {
     getDb()
       .prepare(
@@ -66,6 +76,44 @@ export const printJobRepository = {
     const row = getDb()
       .prepare('SELECT COUNT(*) as c FROM print_jobs WHERE status = ?')
       .get(status) as { c: number }
+    return row.c
+  },
+
+  // True if this job arrived as a forward FROM the leader (recorded in
+  // remote_print_jobs by the cluster receive handler). Such a job must always be
+  // printed locally by this node and never re-forwarded — that would bounce it
+  // back out and it would never print (nor log) here.
+  isForwarded(id: string): boolean {
+    const row = getDb()
+      .prepare('SELECT 1 FROM remote_print_jobs WHERE job_id = ? LIMIT 1')
+      .get(id)
+    return Boolean(row)
+  },
+
+  // Mark old PENDING/RETRYING jobs as FAILED so they stop counting as "pending"
+  // after the printer has been unreachable for too long. Called on worker startup
+  // and hourly thereafter.
+  expireStaleJobs(olderThanHours = 4): number {
+    const cutoff = new Date(Date.now() - olderThanHours * 3_600_000).toISOString()
+    const result = getDb()
+      .prepare(
+        `UPDATE print_jobs
+         SET status = 'FAILED', last_error = 'Auto-expired: printer unreachable for too long', updated_at = ?
+         WHERE status IN ('PENDING', 'RETRYING') AND created_at < ?`,
+      )
+      .run(nowIso(), cutoff) as { changes: number }
+    return result.changes
+  },
+
+  // KOTs this node actually printed today (markPrinted stamps updated_at). Works
+  // for both roles — the leader's local prints and a follower's forwarded prints.
+  countPrintedToday(): number {
+    const { start, end } = istTodayRange()
+    const row = getDb()
+      .prepare(
+        `SELECT COUNT(*) as c FROM print_jobs WHERE status = 'PRINTED' AND updated_at >= ? AND updated_at <= ?`,
+      )
+      .get(start, end) as { c: number }
     return row.c
   },
 }

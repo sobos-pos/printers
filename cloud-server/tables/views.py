@@ -6,6 +6,9 @@ from menu.services.menu_service import MenuService
 from tables.models import Table
 
 
+from core.views import get_session_user
+
+
 class TableListView(View):
     """GET /api/v1/tables/?location=<location_id> — active tables for a location.
 
@@ -20,6 +23,15 @@ class TableListView(View):
                 {'error': {'code': 'BAD_REQUEST', 'message': 'location query param is required'}},
                 status=400,
             )
+
+        user = get_session_user(request)
+        if user and user.location:
+            if str(user.location.id) != str(location_id):
+                return JsonResponse(
+                    {'error': {'code': 'FORBIDDEN', 'message': 'You do not have access to this location.'}},
+                    status=403,
+                )
+
         try:
             tables = (
                 Table.objects.filter(location_id=location_id, is_active=True)

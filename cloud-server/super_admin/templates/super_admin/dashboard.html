@@ -1,0 +1,347 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soboss SuperAdmin Dashboard</title>
+    <link rel="stylesheet" href="{% static 'super_admin/css/style.css' %}">
+</head>
+<body>
+    <header class="header-nav">
+        <a href="{% url 'super_admin_dashboard' %}" class="logo-container">
+            <span class="logo-text">Soboss OS Dashboard</span>
+        </a>
+        <nav style="display:flex; gap:1rem; align-items:center;">
+            <a href="{% url 'super_admin_dashboard' %}#orders-panel" style="color:var(--text-secondary); font-size:0.9rem; font-weight:600;">Orders</a>
+        </nav>
+        <div class="user-profile">
+            <span class="user-tag">
+                {{ request.user.role|upper }}
+            </span>
+            <span style="color: var(--text-secondary); font-size: 0.95rem; font-weight: 500;">
+                Logged in: <strong style="color: var(--text-primary);">{{ request.user.username }}</strong>
+            </span>
+            <a href="{% url 'super_admin_logout' %}" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.85rem; border-radius: 8px;">
+                Log Out
+            </a>
+        </div>
+    </header>
+
+    <main class="dashboard-grid">
+        <!-- LEFT COLUMN: Forms -->
+        <section class="dashboard-panel-left">
+            {% if messages %}
+                <ul class="messages">
+                    {% for message in messages %}
+                        <li class="alert {% if message.tags %}alert-{{ message.tags }}{% endif %}">
+                            {{ message }}
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+
+            <!-- Form: Add Branch -->
+            <div class="glass-panel">
+                <h2 class="panel-title">Add Branch (Location)</h2>
+                {% if restaurant %}
+                    <form action="{% url 'branch_create' %}" method="post">
+                        {% csrf_token %}
+                        <div class="form-group">
+                            <label class="form-label" for="branch_name">Branch Name</label>
+                            <input class="form-control" type="text" id="branch_name" name="name" required placeholder="e.g. Downtown Outlet">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="branch_address">Address</label>
+                            <input class="form-control" type="text" id="branch_address" name="address" placeholder="e.g. 123 Main St, New Delhi">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="branch_timezone">Timezone</label>
+                            <input class="form-control" type="text" id="branch_timezone" name="timezone" value="Asia/Kolkata" placeholder="e.g. Asia/Kolkata">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Geofence (clock-in zone) — optional</label>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <input class="form-control" type="number" step="any" name="latitude" placeholder="Latitude (e.g. 28.6139)">
+                                <input class="form-control" type="number" step="any" name="longitude" placeholder="Longitude (e.g. 77.2090)">
+                            </div>
+                            <input class="form-control" type="number" min="10" name="geofence_radius_m" value="200" placeholder="Radius (metres)" style="margin-top: 0.5rem;">
+                            <small style="color: var(--text-muted, #888); display: block; margin-top: 0.35rem;">
+                                Leave latitude &amp; longitude blank to let staff clock in from anywhere.
+                            </small>
+                        </div>
+                        <button class="btn btn-primary" type="submit" style="width: 100%; margin-top: 0.5rem;">
+                            Add Branch
+                        </button>
+                    </form>
+                {% else %}
+                    <p class="empty-state">Please configure a restaurant in the database first.</p>
+                {% endif %}
+            </div>
+
+            <!-- Form: Create Staff & Generate Invitation -->
+            <div class="glass-panel">
+                <h2 class="panel-title">Create Staff Account</h2>
+                {% if locations %}
+                    <form action="{% url 'invite_create' %}" method="post">
+                        {% csrf_token %}
+                        <div class="form-group">
+                            <label class="form-label" for="staff_username">Username</label>
+                            <input class="form-control" type="text" id="staff_username" name="username" required placeholder="e.g. johndoe">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="staff_email">Email Address</label>
+                            <input class="form-control" type="email" id="staff_email" name="email" required placeholder="e.g. john@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="staff_role">Role</label>
+                            <select class="form-control" id="staff_role" name="role" required>
+                                <option value="waiter">Waiter</option>
+                                <option value="manager">Manager</option>
+                                <option value="staff">Staff</option>
+                                <option value="kiosk">Kiosk</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="staff_location">Assigned Branch (Location)</label>
+                            <select class="form-control" id="staff_location" name="location_id" required>
+                                {% for loc in locations %}
+                                    <option value="{{ loc.id }}">{{ loc.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="staff_password">Temporary Password</label>
+                            <input class="form-control" type="password" id="staff_password" name="password" required placeholder="••••••••">
+                        </div>
+                        <button class="btn btn-cyan" type="submit" style="width: 100%; margin-top: 0.5rem;">
+                            Generate Staff & Link
+                        </button>
+                    </form>
+                {% else %}
+                    <p class="empty-state">Add at least one branch before creating staff accounts.</p>
+                {% endif %}
+            </div>
+        </section>
+
+        <!-- RIGHT COLUMN: Branches, Staff, & Invitations -->
+        <section style="display: flex; flex-direction: column; gap: 2rem;">
+            <!-- Panel: Restaurant Details & Branches -->
+            <div class="glass-panel">
+                <h2 class="panel-title">
+                    Restaurant: {% if restaurant %}{{ restaurant.name }}{% else %}No Restaurant Configured{% endif %}
+                </h2>
+                {% if locations %}
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Branch Name</th>
+                                    <th>Address</th>
+                                    <th>Timezone</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for loc in locations %}
+                                    <tr>
+                                        <td><strong>{{ loc.name }}</strong></td>
+                                        <td><span style="color: var(--text-secondary);">{{ loc.address|default:"-" }}</span></td>
+                                        <td><span class="badge badge-muted">{{ loc.timezone }}</span></td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="empty-state">No branches have been added to this restaurant yet.</p>
+                {% endif %}
+            </div>
+
+            <!-- Panel: Staff List -->
+            <div class="glass-panel">
+                <h2 class="panel-title">Active / Registered Staff</h2>
+                {% if staff %}
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>Email</th>
+                                    <th>Role</th>
+                                    <th>Branch</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for member in staff %}
+                                    <tr>
+                                        <td><strong>{{ member.username }}</strong></td>
+                                        <td><span style="color: var(--text-secondary);">{{ member.email }}</span></td>
+                                        <td><span class="badge badge-primary">{{ member.role|upper }}</span></td>
+                                        <td>{{ member.location.name|default:"All Branches (Owner)" }}</td>
+                                        <td>
+                                            {% if member.is_active %}
+                                                <span class="badge badge-success">ACTIVE</span>
+                                            {% else %}
+                                                <span class="badge badge-rose">INACTIVE</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="empty-state">No staff users registered yet.</p>
+                {% endif %}
+            </div>
+
+            <!-- Panel: Orders & Waiter Tracking -->
+            <div class="glass-panel" id="orders-panel">
+                <h2 class="panel-title">Orders &amp; Waiter Tracking</h2>
+                {% if restaurant %}
+                    <form method="get" style="display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1.25rem; align-items:flex-end;">
+                        <div class="form-group" style="margin:0; min-width:140px;">
+                            <label class="form-label" for="filter_status">Status</label>
+                            <select class="form-control" id="filter_status" name="status">
+                                <option value="">All statuses</option>
+                                {% for st in order_statuses %}
+                                    <option value="{{ st }}" {% if order_filters.status == st %}selected{% endif %}>{{ st }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; min-width:160px;">
+                            <label class="form-label" for="filter_location">Branch</label>
+                            <select class="form-control" id="filter_location" name="location">
+                                <option value="">All branches</option>
+                                {% for loc in locations %}
+                                    <option value="{{ loc.id }}" {% if order_filters.location == loc.id|stringformat:"s" %}selected{% endif %}>{{ loc.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0; min-width:160px;">
+                            <label class="form-label" for="filter_waiter">Placed By</label>
+                            <select class="form-control" id="filter_waiter" name="waiter">
+                                <option value="">All staff</option>
+                                {% for w in waiters %}
+                                    <option value="{{ w.id }}" {% if order_filters.waiter == w.id|stringformat:"s" %}selected{% endif %}>{{ w.username }} ({{ w.role }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" type="submit" style="padding:0.6rem 1.2rem;">Filter</button>
+                        <a href="{% url 'super_admin_dashboard' %}#orders-panel" class="btn btn-secondary" style="padding:0.6rem 1.2rem;">Clear</a>
+                    </form>
+
+                    {% if orders %}
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Table</th>
+                                        <th>Branch</th>
+                                        <th>Source</th>
+                                        <th>Status</th>
+                                        <th>Total</th>
+                                        <th>Placed By (Waiter)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for order in orders %}
+                                        <tr>
+                                            <td><span style="color:var(--text-secondary); font-size:0.85rem;">{{ order.created_at|date:"M d, H:i" }}</span></td>
+                                            <td><strong>{{ order.table.label|default:"—" }}</strong></td>
+                                            <td>{{ order.location.name }}</td>
+                                            <td><span class="badge badge-muted">{{ order.source }}</span></td>
+                                            <td><span class="badge badge-primary">{{ order.status }}</span></td>
+                                            <td><strong>₹{{ order.total }}</strong></td>
+                                            <td>
+                                                {% if order.created_by %}
+                                                    <strong>{{ order.created_by.username }}</strong>
+                                                    <span style="color:var(--text-secondary); font-size:0.85rem;"> ({{ order.created_by.get_role_display|default:order.created_by.role }})</span>
+                                                {% else %}
+                                                    <span style="color:var(--text-muted);">Anonymous / QR</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        <p style="color:var(--text-muted); font-size:0.85rem; margin-top:0.75rem;">Showing up to 200 most recent orders.</p>
+                    {% else %}
+                        <p class="empty-state">No orders match the current filters.</p>
+                    {% endif %}
+                {% else %}
+                    <p class="empty-state">Configure a restaurant to view orders.</p>
+                {% endif %}
+            </div>
+
+            <!-- Panel: Invitation Links -->
+            <div class="glass-panel">
+                <h2 class="panel-title">Activation Links / Invitations</h2>
+                {% if invitations %}
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Staff Email</th>
+                                    <th>Branch</th>
+                                    <th>Role</th>
+                                    <th>Invitation Status</th>
+                                    <th>Activation Link</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for invite in invitations %}
+                                    <tr>
+                                        <td><strong>{{ invite.user.email }}</strong></td>
+                                        <td>{{ invite.location.name }}</td>
+                                        <td><span class="badge badge-primary">{{ invite.user.role|upper }}</span></td>
+                                        <td>
+                                            {% if invite.is_accepted %}
+                                                <span class="badge badge-success">ACCEPTED</span>
+                                            {% elif invite.is_expired %}
+                                                <span class="badge badge-muted">EXPIRED</span>
+                                            {% else %}
+                                                <span class="badge badge-cyan">PENDING</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if not invite.is_accepted %}
+                                                <button class="copy-link-btn" onclick="copyInviteLink(this, '{{ request.scheme }}://{{ request.get_host }}/super-admin/activate/{{ invite.token }}/')">
+                                                    Copy Invite URL
+                                                </button>
+                                            {% else %}
+                                                <span style="color: var(--text-muted); font-size: 0.85rem;">Completed</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="empty-state">No activation links generated yet.</p>
+                {% endif %}
+            </div>
+        </section>
+    </main>
+
+    <script>
+        function copyInviteLink(button, url) {
+            navigator.clipboard.writeText(url).then(function() {
+                var originalText = button.innerHTML;
+                button.innerHTML = "Copied! ✓";
+                button.classList.add("copied");
+                setTimeout(function() {
+                    button.innerHTML = originalText;
+                    button.classList.remove("copied");
+                }, 2000);
+            }, function(err) {
+                console.error('Could not copy text: ', err);
+            });
+        }
+    </script>
+</body>
+</html>

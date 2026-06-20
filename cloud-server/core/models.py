@@ -1,3 +1,4 @@
+import secrets
 import uuid
 
 from django.db import models
@@ -23,6 +24,22 @@ class Restaurant(BaseModel):
     address = models.TextField(blank=True)
     tax_id = models.CharField(max_length=20, blank=True)
     is_active = models.BooleanField(default=True)
+    # Shared HS256 secret used to sign staff "shift" JWTs. Every Electron device
+    # in the restaurant stores a copy so it can verify staff tokens offline.
+    # Server-side secret only — rotate via rotate_jwt_secret() on compromise.
+    jwt_signing_secret = models.CharField(max_length=128, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.jwt_signing_secret:
+            self.jwt_signing_secret = secrets.token_hex(32)
+        super().save(*args, **kwargs)
+
+    def rotate_jwt_secret(self) -> str:
+        """Issue a new signing secret (invalidates all outstanding staff tokens
+        and forces every device to re-fetch). Returns the new secret."""
+        self.jwt_signing_secret = secrets.token_hex(32)
+        self.save(update_fields=['jwt_signing_secret', 'updated_at'])
+        return self.jwt_signing_secret
 
     def __str__(self):
         return self.name
@@ -36,6 +53,16 @@ class Location(BaseModel):
     address = models.TextField(blank=True)
     timezone = models.CharField(max_length=40, default='Asia/Kolkata')
     is_active = models.BooleanField(default=True)
+    # Geofence: staff may only clock in within `geofence_radius_m` metres of this
+    # point. Both coordinates null => geofencing disabled for this location (staff
+    # can clock in from anywhere). Configured by a manager in the admin/super-admin.
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    geofence_radius_m = models.PositiveIntegerField(default=200)
+
+    @property
+    def geofence_enabled(self) -> bool:
+        return self.latitude is not None and self.longitude is not None
 
     def __str__(self):
         return f'{self.restaurant.name} — {self.name}'
@@ -44,6 +71,9 @@ class Location(BaseModel):
 class StaffUser(AbstractUser):
     restaurant = models.ForeignKey(
         Restaurant, related_name='staff_users', on_delete=models.CASCADE, null=True, blank=True
+    )
+    location = models.ForeignKey(
+        'Location', related_name='staff_users', on_delete=models.SET_NULL, null=True, blank=True
     )
     role = models.CharField(
         max_length=20,
@@ -84,7 +114,7 @@ class LocationNode(BaseModel):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=['location', 'node_id'], name='uniq_location_node'),
+            models.UniqueConstraint(fields=['node_id'], name='uniq_node_id_global'),
         ]
 
     def __str__(self):
@@ -202,6 +232,33 @@ class SyncLog(BaseModel):
 
     def __str__(self):
         return f'{self.sync_type} {self.direction} → {self.status}'
+
+
+class StaffAttendance(BaseModel):
+    """Tracks waiter/staff clock-in and clock-out times per shift."""
+
+    staff_user = models.ForeignKey(
+        StaffUser, on_delete=models.CASCADE, related_name='attendances'
+    )
+    location = models.ForeignKey(
+        Location, on_delete=models.CASCADE, related_name='attendances', null=True, blank=True
+    )
+    clock_in_at = models.DateTimeField(auto_now_add=True)
+    clock_out_at = models.DateTimeField(null=True, blank=True)
+    # Geolocation captured at clock-in (audit trail for the geofence check) and at
+    # clock-out. distance_m is metres from the location's geofence centre at clock-in.
+    clock_in_lat = models.FloatField(null=True, blank=True)
+    clock_in_lng = models.FloatField(null=True, blank=True)
+    clock_in_distance_m = models.FloatField(null=True, blank=True)
+    clock_out_lat = models.FloatField(null=True, blank=True)
+    clock_out_lng = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-clock_in_at']
+
+    def __str__(self):
+        out = self.clock_out_at.strftime('%H:%M') if self.clock_out_at else 'open'
+        return f'{self.staff_user} {self.clock_in_at.strftime("%Y-%m-%d %H:%M")} → {out}'
 
 
 class NodeConfig(BaseModel):

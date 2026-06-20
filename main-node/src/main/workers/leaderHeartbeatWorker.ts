@@ -1,22 +1,9 @@
-import os from 'os'
 import { config, isCloudConfigured } from '../config'
 import { nodeConfigRepository } from '../repositories/nodeConfigRepository'
+import { getLanIp } from '../net'
 
 let timer: ReturnType<typeof setInterval> | null = null
 let consecutiveFailures = 0
-
-function getLocalIp(): string {
-  // Mirror cloudClient.sendHeartbeat's adapter selection for consistency.
-  const nets = os.networkInterfaces()
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] || []) {
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address
-      }
-    }
-  }
-  return '127.0.0.1'
-}
 
 /**
  * Learn the current leader's LAN address from the cloud (single fetch). Used on
@@ -43,6 +30,9 @@ async function refreshLeaderFromCloud(): Promise<{ host: string; port: number } 
         nodeConfigRepository.set('leader_node_id', leader.node_id)
         nodeConfigRepository.set('leader_host', leader.lan_host)
         nodeConfigRepository.set('leader_port', String(leader.lan_port))
+        // Seed leader_status from cloud's freshness view so the UI has an
+        // initial value before the first LAN heartbeat round-trip completes.
+        nodeConfigRepository.set('leader_status', leader.is_online ? 'ONLINE' : 'OFFLINE')
         return { host: leader.lan_host, port: Number(leader.lan_port) || 3001 }
       }
     }
@@ -77,12 +67,13 @@ export const leaderHeartbeatWorker = {
           node_id: config.nodeId,
           node_label: nodeConfigRepository.get('node_label') || '',
           station_codes: config.assignedStations,
-          lan_host: getLocalIp(),
+          lan_host: getLanIp(),
           lan_port: config.localApiPort,
         }
 
         const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), 5000)
+        // Keep the LAN beat timeout below leaderBeatMs so ticks don't pile up.
+        const timeout = setTimeout(() => controller.abort(), 3000)
         try {
           const res = await fetch(`http://${host}:${port}/api/v1/cluster/heartbeat`, {
             method: 'POST',
@@ -93,6 +84,10 @@ export const leaderHeartbeatWorker = {
           clearTimeout(timeout)
           if (!res.ok) throw new Error(`leader heartbeat returned ${res.status}`)
           consecutiveFailures = 0
+          // Leader is reachable over LAN — mark it online so the Electron UI
+          // reflects the real state. This is the only place that sets this for
+          // followers because heartbeatWorker (cloud path) only runs on the leader.
+          nodeConfigRepository.set('leader_status', 'ONLINE')
         } catch (err) {
           clearTimeout(timeout)
           consecutiveFailures += 1
@@ -101,9 +96,10 @@ export const leaderHeartbeatWorker = {
               err instanceof Error ? err.message : err
             }`,
           )
-          // The leader may have changed (manual failover). Re-learn its address
-          // from the cloud once, then keep beating over the LAN.
+          // After 3 misses, mark leader offline and re-learn its address from
+          // the cloud (covers a manual failover where the leader changed).
           if (consecutiveFailures >= 3) {
+            nodeConfigRepository.set('leader_status', 'OFFLINE')
             const learned = await refreshLeaderFromCloud()
             if (learned) consecutiveFailures = 0
           }
@@ -114,8 +110,8 @@ export const leaderHeartbeatWorker = {
     }
 
     tick()
-    timer = setInterval(tick, config.heartbeatMs)
-    console.log(`[LeaderHeartbeatWorker] Started (${config.heartbeatMs}ms)`)
+    timer = setInterval(tick, config.leaderBeatMs)
+    console.log(`[LeaderHeartbeatWorker] Started (${config.leaderBeatMs}ms)`)
   },
 
   stop(): void {

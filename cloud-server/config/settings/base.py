@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'tables',
     'user_app',
     'waiter_app',
+    'super_admin',
 ]
 
 MIDDLEWARE = [
@@ -111,6 +112,11 @@ STORAGES = {
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Menu item images are uploaded as base64 inside the JSON management API, so the
+# request body can be larger than Django's 2.5 MB default. Allow up to ~15 MB
+# (a ~11 MB original image after base64 inflation).
+DATA_UPLOAD_MAX_MEMORY_SIZE = 15 * 1024 * 1024
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'core.StaffUser'

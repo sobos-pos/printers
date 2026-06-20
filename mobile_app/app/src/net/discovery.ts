@@ -24,22 +24,25 @@ interface ZeroconfService {
   txt?: Record<string, unknown>
 }
 
-let Zeroconf: any | undefined
-function getZeroconf(): any | null {
-  if (Zeroconf === undefined) {
+// Cache only the CLASS reference — never create an instance here.
+// isMdnsAvailable() must NOT instantiate Zeroconf because the constructor on some
+// Android builds acquires a multicast lock; leaving that instance alive would block
+// the real scan. Instance creation is deferred to discoverLeader().
+let ZeroconfClass: (new () => any) | null | undefined // undefined = not yet attempted
+
+function loadZeroconfClass(): (new () => any) | null {
+  if (ZeroconfClass === undefined) {
     try {
-      // Lazy require so import never crashes when the native module is absent.
-      Zeroconf = require('react-native-zeroconf').default
+      // Lazy require so this module never crashes when the native module is absent
+      // (e.g. Expo Go, web, CI). Only custom dev-client and production builds carry
+      // the react-native-zeroconf native module.
+      const mod = require('react-native-zeroconf')
+      ZeroconfClass = mod.default ?? mod
     } catch {
-      Zeroconf = null
+      ZeroconfClass = null
     }
   }
-  if (!Zeroconf) return null
-  try {
-    return new Zeroconf()
-  } catch {
-    return null
-  }
+  return ZeroconfClass ?? null
 }
 
 function pickIpv4(addresses?: string[]): string | undefined {
@@ -47,30 +50,64 @@ function pickIpv4(addresses?: string[]): string | undefined {
   return addresses.find((a) => /^\d{1,3}(\.\d{1,3}){3}$/.test(a)) ?? addresses[0]
 }
 
+function normalizeTxtValue(value: unknown): string | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return String.fromCharCode(...value.filter((n) => typeof n === 'number'))
+  return String(value)
+}
+
+function normalizeTxt(txt?: Record<string, unknown>): Record<string, string> {
+  if (!txt) return {}
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(txt)) {
+    const normalized = normalizeTxtValue(value)
+    if (normalized != null) out[key] = normalized
+  }
+  return out
+}
+
 function toDiscovered(svc: ZeroconfService): DiscoveredNode | null {
-  const ip = pickIpv4(svc.addresses) ?? svc.host
+  const ip =
+    pickIpv4(svc.addresses) ??
+    (svc.host && /^\d{1,3}(\.\d{1,3}){3}$/.test(svc.host) ? svc.host : undefined)
   if (!ip || !svc.port) return null
-  const txt = svc.txt ?? {}
+  const txt = normalizeTxt(svc.txt)
   return {
     url: `http://${ip}:${svc.port}`,
-    nodeId: txt.node_id as string | undefined,
-    locationId: txt.location_id as string | undefined,
-    clusterRole: txt.cluster_role as string | undefined,
+    nodeId: txt.node_id,
+    locationId: txt.location_id,
+    clusterRole: txt.cluster_role,
   }
 }
 
-/** Returns whether native mDNS is available on this build (false in Expo Go). */
+/**
+ * Returns whether native mDNS is available on this build.
+ * False in Expo Go — only custom dev-client / production builds have the native module.
+ * Does NOT instantiate Zeroconf (avoids spurious multicast-lock acquisition).
+ */
 export function isMdnsAvailable(): boolean {
-  return getZeroconf() != null
+  return loadZeroconfClass() != null
 }
 
 /**
- * Browse for the leader node. Resolves as soon as a service with cluster_role==="leader" is found,
- * otherwise returns the best non-leader candidate seen before the timeout, or null if none.
+ * Browse for the leader node. Resolves as soon as a service with cluster_role==="leader"
+ * is found, otherwise returns the best non-leader candidate seen before the timeout, or
+ * null if none found.
+ *
+ * A fresh Zeroconf instance is created per call and always stopped in the finish path,
+ * so concurrent scans are safe and there are no leaked multicast locks.
  */
 export function discoverLeader(timeoutMs = NET.mdnsBrowseTimeoutMs): Promise<DiscoveredNode | null> {
-  const zc = getZeroconf()
-  if (!zc) return Promise.resolve(null)
+  const Cls = loadZeroconfClass()
+  if (!Cls) return Promise.resolve(null)
+
+  let zc: any
+  try {
+    zc = new Cls()
+  } catch {
+    return Promise.resolve(null)
+  }
 
   return new Promise((resolve) => {
     let settled = false
@@ -82,10 +119,11 @@ export function discoverLeader(timeoutMs = NET.mdnsBrowseTimeoutMs): Promise<Dis
       clearTimeout(timer)
       try {
         zc.stop()
-        zc.removeDeviceListeners?.()
-      } catch {
-        /* noop */
-      }
+      } catch { /* noop */ }
+      try {
+        // removeDeviceListeners exists in react-native-zeroconf >=0.13
+        zc.removeDeviceListeners()
+      } catch { /* older builds expose removeEventListeners or nothing */ }
       resolve(result)
     }
 
@@ -94,11 +132,13 @@ export function discoverLeader(timeoutMs = NET.mdnsBrowseTimeoutMs): Promise<Dis
     zc.on('resolved', (svc: ZeroconfService) => {
       const node = toDiscovered(svc)
       if (!node) return
-      if (node.clusterRole === 'leader') finish(node)
-      else if (!fallback) fallback = node // keep first follower as a fallback target
+      // Prefer explicit leader; accept missing role (Android TXT quirks) for single-node venues.
+      if (node.clusterRole === 'leader' || !node.clusterRole) finish(node)
+      else if (!fallback) fallback = node
     })
+
     zc.on('error', () => {
-      /* swallow; timer will resolve with whatever we have */
+      /* swallow individual errors; timer will resolve with whatever we have */
     })
 
     try {

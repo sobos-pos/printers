@@ -26,6 +26,25 @@ export async function clearToken(): Promise<void> {
   }
 }
 
+// ---- Staff shift JWT (for node offline auth) ----
+export async function saveStaffToken(token: string): Promise<void> {
+  await SecureStore.setItemAsync(STORAGE_KEYS.staffToken, token)
+}
+export async function getStaffToken(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(STORAGE_KEYS.staffToken)
+  } catch {
+    return null
+  }
+}
+export async function clearStaffToken(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(STORAGE_KEYS.staffToken)
+  } catch {
+    /* noop */
+  }
+}
+
 // ---- Generic JSON helpers ----
 async function getJson<T>(key: string): Promise<T | null> {
   try {
@@ -50,6 +69,13 @@ export const getNodeBaseUrl = () => AsyncStorage.getItem(STORAGE_KEYS.nodeBaseUr
 export const saveCloudBaseUrl = (url: string) =>
   AsyncStorage.setItem(STORAGE_KEYS.cloudBaseUrl, url)
 export const getCloudBaseUrl = () => AsyncStorage.getItem(STORAGE_KEYS.cloudBaseUrl)
+
+// ---- mDNS-discovered node URL (persisted across restarts) ----
+export const saveDiscoveredNodeUrl = (url: string) =>
+  AsyncStorage.setItem(STORAGE_KEYS.discoveredNodeUrl, url)
+export const getDiscoveredNodeUrl = () => AsyncStorage.getItem(STORAGE_KEYS.discoveredNodeUrl)
+export const clearDiscoveredNodeUrl = () =>
+  AsyncStorage.removeItem(STORAGE_KEYS.discoveredNodeUrl)
 
 // ---- Tables cache (cloud-only endpoint => cache for Local mode) ----
 export const saveTablesCache = (locationId: string, tables: TableSummary[]) =>

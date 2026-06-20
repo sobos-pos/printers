@@ -10,7 +10,13 @@ ONLINE_FRESHNESS_SECONDS = 90
 
 
 def _is_fresh(node, now=None) -> bool:
-    """Derive online status from freshness instead of the stored is_online flag."""
+    """Derive online status from freshness AND the stored is_online flag.
+
+    Explicit is_online=False (set by markOffline) always wins so a node that
+    called /node-offline/ is immediately offline in heartbeat peer lists too.
+    """
+    if not node.is_online:
+        return False
     now = now or timezone.now()
     stamp = node.last_heartbeat_at if node.cluster_role == 'leader' else node.cluster_reported_at
     if stamp is None:
