@@ -790,8 +790,14 @@ class AttendanceClockOutView(View):
         open_shift.clock_out_at = timezone.now()
         open_shift.clock_out_lat = lat
         open_shift.clock_out_lng = lng
+        out_distance = None
+        loc = open_shift.location
+        if lat is not None and lng is not None and loc is not None and loc.geofence_enabled:
+            out_distance = _haversine_m(lat, lng, loc.latitude, loc.longitude)
+        open_shift.clock_out_distance_m = out_distance
         open_shift.save(update_fields=[
-            'clock_out_at', 'clock_out_lat', 'clock_out_lng', 'updated_at',
+            'clock_out_at', 'clock_out_lat', 'clock_out_lng',
+            'clock_out_distance_m', 'updated_at',
         ])
         return JsonResponse(_serialize_attendance(open_shift))
 

@@ -475,7 +475,7 @@ class Command(BaseCommand):
         branch_tables: dict[str, dict[str, Table]] = {}
 
         for branch in BRANCHES:
-            location, _ = Location.objects.get_or_create(
+            location, _ = Location.objects.update_or_create(
                 restaurant=restaurant,
                 name=branch['name'],
                 defaults={
@@ -483,6 +483,7 @@ class Command(BaseCommand):
                     'latitude': branch.get('latitude'),
                     'longitude': branch.get('longitude'),
                     'geofence_radius_m': branch.get('geofence_radius_m', 200),
+                    'is_active': True,
                 },
             )
             locations[branch['name']] = location

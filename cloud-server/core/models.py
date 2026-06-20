@@ -252,6 +252,7 @@ class StaffAttendance(BaseModel):
     clock_in_distance_m = models.FloatField(null=True, blank=True)
     clock_out_lat = models.FloatField(null=True, blank=True)
     clock_out_lng = models.FloatField(null=True, blank=True)
+    clock_out_distance_m = models.FloatField(null=True, blank=True)
 
     class Meta:
         ordering = ['-clock_in_at']

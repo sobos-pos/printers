@@ -6,7 +6,9 @@ import { router } from 'expo-router'
 import { useState } from 'react'
 import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useAuth } from '../../auth/store'
+import { resolveClockOutCoords } from '../../ordering/attendanceActions'
 import { useAttendanceStatus, useClockOut } from '../../ordering/hooks'
+import { useGeofence } from '../../ordering/useGeofence'
 import { colors, radius, spacing } from '../theme'
 
 function initialsOf(name: string | undefined): string {
@@ -22,6 +24,7 @@ export function ProfileMenu() {
   const logout = useAuth((s) => s.logout)
   const attendanceQ = useAttendanceStatus()
   const clockOut = useClockOut()
+  const geo = useGeofence()
   const [open, setOpen] = useState(false)
 
   const close = () => setOpen(false)
@@ -44,7 +47,8 @@ export function ProfileMenu() {
             text: 'Clock out & sign out',
             onPress: async () => {
               try {
-                await clockOut.mutateAsync(null)
+                const coords = await resolveClockOutCoords(geo)
+                await clockOut.mutateAsync(coords)
               } catch {
                 // Even if clock-out fails (offline), don't trap the user — sign out anyway.
               }

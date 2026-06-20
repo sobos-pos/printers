@@ -16,6 +16,12 @@ import { flattenLocations, useAuth } from '../auth/store'
 import { ApiError, NetworkError } from '../net/apiClient'
 import { useCart } from '../ordering/cart'
 import { useAttendanceStatus, useClockIn, useClockOut, useMenu, usePlaceOrder, useTables } from '../ordering/hooks'
+import {
+  LocationUnavailableError,
+  OutsideGeofenceError,
+  resolveClockInCoords,
+  resolveClockOutCoords,
+} from '../ordering/attendanceActions'
 import { useGeofence, type GeofenceState } from '../ordering/useGeofence'
 import { formatDistance } from '../lib/geo'
 import type { AttendanceStatus, MenuItem } from '../lib/types'
@@ -49,7 +55,8 @@ export default function OrderingScreen() {
   const attendanceQ = useAttendanceStatus()
   const clockInMut = useClockIn()
   const clockOutMut = useClockOut()
-  const geo = useGeofence()
+  const geo = useGeofence({ watchActive: !attendanceQ.data?.clocked_in })
+  const [clockInLocalError, setClockInLocalError] = useState<string | null>(null)
 
   // Default the category to the first one whenever a menu loads.
   useEffect(() => {
@@ -103,12 +110,26 @@ export default function OrderingScreen() {
         clockingIn={clockInMut.isPending}
         clockingOut={clockOutMut.isPending}
         geo={geo}
-        clockInError={clockInMut.error}
-        onClockIn={() => {
+        clockInError={
+          clockInMut.error ??
+          (clockInLocalError ? new Error(clockInLocalError) : null)
+        }
+        onClockIn={async () => {
           clockInMut.reset()
-          clockInMut.mutate(geo.coords ?? null)
+          setClockInLocalError(null)
+          try {
+            const coords = await resolveClockInCoords(geo)
+            await clockInMut.mutateAsync(coords)
+          } catch (e) {
+            if (e instanceof LocationUnavailableError || e instanceof OutsideGeofenceError) {
+              setClockInLocalError(e.message)
+            }
+          }
         }}
-        onClockOut={() => clockOutMut.mutate(geo.coords ?? null)}
+        onClockOut={async () => {
+          const coords = await resolveClockOutCoords(geo)
+          await clockOutMut.mutateAsync(coords)
+        }}
       />
 
       {/* Location selector (only when the user has more than one) */}
@@ -225,16 +246,21 @@ function ClockBar({
 
   if (!status || !status.clocked_in) {
     // Resolve the geofence gate. The server re-validates on clock-in regardless.
-    const { geofenceEnabled, permission, check, loading: geoLoading, coords } = geo
+    const { geofenceEnabled, locationConfigured, permission, check, loading: geoLoading, coords } =
+      geo
+    const nativeModuleMissing = locationConfigured && !geo.locationNativeAvailable
     const locating = geofenceEnabled && geoLoading && !coords
     const permissionBlocked = geofenceEnabled && permission !== 'granted' && !geoLoading
     const outOfRange = geofenceEnabled && permission === 'granted' && !check.within
-    const blocked = locating || permissionBlocked || outOfRange
+    const blocked = locating || permissionBlocked || outOfRange || nativeModuleMissing
 
     // Status line describing why clock-in is (un)available.
     let info: string | null = null
     let tone: 'muted' | 'danger' | 'success' = 'muted'
-    if (locating) {
+    if (nativeModuleMissing) {
+      info = geo.error ?? 'Location module missing — rebuild the dev app for geofence.'
+      tone = 'danger'
+    } else if (locating) {
       info = 'Finding your location…'
     } else if (permissionBlocked) {
       info = 'Location permission needed to clock in'

@@ -2,22 +2,34 @@
 //
 // The geofence is checked against the user's ASSIGNED location (context.user.location)
 // because that's exactly what the server uses to gate clock-in — keeping the client
-// pre-check and the server enforcement in lock-step. The server always re-validates,
-// so this hook is purely about UX (button enable/disable + a distance readout).
+// pre-check and the server enforcement in lock-step. The server always re-validates;
+// this hook drives UX (button enable/disable + distance readout) and supplies fresh
+// coordinates at clock-in/out time.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppState } from 'react-native'
 import { useAuth } from '../auth/store'
+import { readDeviceCoords, type GeoPermission } from '../lib/deviceLocation'
 import { evaluateGeofence, hasGeofence, type GeofenceCheck } from '../lib/geo'
 import { loadExpoLocation } from '../lib/nativeModules'
 import type { Coords, LocationCtx } from '../lib/types'
 
-export type GeoPermission = 'undetermined' | 'granted' | 'denied'
+export type { GeoPermission }
+
+/** How often to re-check position while the geofence gate is active (not clocked in). */
+const WATCH_INTERVAL_MS = 30_000
+
+export interface UseGeofenceOptions {
+  /** Poll for position updates while true (typically when not clocked in). */
+  watchActive?: boolean
+}
 
 export interface GeofenceState {
   /** The location we geofence against (the user's assigned location), or null. */
   targetLocation: LocationCtx | null
-  /** Whether that location actually has a geofence configured. */
+  /** Server-side geofence is configured (lat/lng set on assigned location). */
+  locationConfigured: boolean
+  /** Client can read GPS and enforce the gate (native module present). */
   geofenceEnabled: boolean
   /** False when expo-location isn't in the installed dev build. */
   locationNativeAvailable: boolean
@@ -28,15 +40,20 @@ export interface GeofenceState {
   error: string | null
   /** Re-request permission (when prompt) and refresh the current position. */
   refresh: (prompt?: boolean) => Promise<void>
+  /**
+   * Force a fresh GPS read (maximumAge: 0). Updates hook state and returns coords.
+   * Returns null when unavailable; sets `error` when the read fails or permission denied.
+   */
+  getFreshCoords: (prompt?: boolean) => Promise<Coords | null>
 }
 
-export function useGeofence(): GeofenceState {
+export function useGeofence(options: UseGeofenceOptions = {}): GeofenceState {
+  const { watchActive = false } = options
   const user = useAuth((s) => s.context?.user ?? null)
   const targetLocation = user?.location ?? null
   const locationConfigured = hasGeofence(targetLocation)
   const Location = useMemo(() => loadExpoLocation(), [])
   const locationNativeAvailable = Location != null
-  // Client-side gate only when both the server geofence and native module exist.
   const geofenceEnabled = locationConfigured && locationNativeAvailable
 
   const [permission, setPermission] = useState<GeoPermission>('undetermined')
@@ -44,6 +61,13 @@ export function useGeofence(): GeofenceState {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
+
+  const applyRead = useCallback((result: Awaited<ReturnType<typeof readDeviceCoords>>) => {
+    setPermission(result.permission)
+    setCoords(result.coords)
+    setError(result.error)
+    return result.coords
+  }, [])
 
   const refresh = useCallback(
     async (prompt = false) => {
@@ -56,30 +80,28 @@ export function useGeofence(): GeofenceState {
       setLoading(true)
       setError(null)
       try {
-        let perm = await Location.getForegroundPermissionsAsync()
-        // Only actively prompt when asked (e.g. user tapped "Enable location"), and
-        // only if the OS still allows asking — avoids nagging on every render.
-        if (prompt && perm.status !== 'granted' && perm.canAskAgain) {
-          perm = await Location.requestForegroundPermissionsAsync()
-        }
-
-        if (perm.status === 'granted') {
-          setPermission('granted')
-          const pos = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-          })
-          setCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
-        } else {
-          setPermission(perm.status === 'denied' ? 'denied' : 'undetermined')
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Could not read your location.')
+        applyRead(await readDeviceCoords({ prompt }))
       } finally {
         setLoading(false)
         inFlight.current = false
       }
     },
-    [Location],
+    [Location, applyRead],
+  )
+
+  const getFreshCoords = useCallback(
+    async (prompt = false): Promise<Coords | null> => {
+      if (!Location) return null
+      setLoading(true)
+      setError(null)
+      try {
+        const result = await readDeviceCoords({ prompt })
+        return applyRead(result)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [Location, applyRead],
   )
 
   // Initial read: prompt when the location is geofenced (we genuinely need it),
@@ -98,6 +120,15 @@ export function useGeofence(): GeofenceState {
     return () => sub.remove()
   }, [Location, refresh])
 
+  // Periodic refresh while waiting to clock in so the gate reacts as the user moves.
+  useEffect(() => {
+    if (!watchActive || !geofenceEnabled) return
+    const id = setInterval(() => {
+      if (!inFlight.current) refresh(false)
+    }, WATCH_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [watchActive, geofenceEnabled, refresh])
+
   const check =
     geofenceEnabled
       ? evaluateGeofence(targetLocation, coords)
@@ -115,6 +146,7 @@ export function useGeofence(): GeofenceState {
 
   return {
     targetLocation,
+    locationConfigured,
     geofenceEnabled,
     locationNativeAvailable,
     permission,
@@ -123,5 +155,6 @@ export function useGeofence(): GeofenceState {
     check,
     error: buildError,
     refresh,
+    getFreshCoords,
   }
 }

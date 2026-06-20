@@ -169,6 +169,39 @@ class AttendanceGeofenceTests(TestCase):
         self.assertEqual(res.status_code, 201)
         self.assertTrue(res.json()['clocked_in'])
 
+    def test_clock_in_persists_geo_audit_fields(self):
+        from core.models import StaffAttendance
+
+        self._clock_in({'latitude': self.LAT, 'longitude': self.LNG})
+        att = StaffAttendance.objects.get(staff_user=self.user)
+        self.assertAlmostEqual(att.clock_in_lat, self.LAT)
+        self.assertAlmostEqual(att.clock_in_lng, self.LNG)
+        self.assertIsNotNone(att.clock_in_distance_m)
+        self.assertLess(att.clock_in_distance_m, 1)
+
+    def _clock_out(self, body):
+        return self.client.post(
+            '/api/v1/attendance/clock-out/',
+            data=json.dumps(body), content_type='application/json', **self._auth(),
+        )
+
+    def test_clock_out_persists_geo_audit_fields(self):
+        from core.models import StaffAttendance
+
+        self._clock_in({'latitude': self.LAT, 'longitude': self.LNG})
+        res = self._clock_out({'latitude': self.LAT + 0.001, 'longitude': self.LNG})
+        self.assertEqual(res.status_code, 200)
+        att = StaffAttendance.objects.get(staff_user=self.user)
+        self.assertIsNotNone(att.clock_out_at)
+        self.assertAlmostEqual(att.clock_out_lat, self.LAT + 0.001, places=3)
+        self.assertAlmostEqual(att.clock_out_lng, self.LNG, places=3)
+        self.assertIsNotNone(att.clock_out_distance_m)
+
+    def test_clock_out_allowed_without_coords(self):
+        self._clock_in({'latitude': self.LAT, 'longitude': self.LNG})
+        res = self._clock_out({})
+        self.assertEqual(res.status_code, 200)
+
     def test_clock_in_anywhere_when_no_geofence(self):
         self.location.latitude = None
         self.location.longitude = None
