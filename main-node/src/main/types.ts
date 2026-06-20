@@ -171,6 +171,16 @@ export interface MenuCachePayload {
     subcategories?: Array<{ id: string; name: string; display_order: number }>
     items: MenuItemPayload[]
   }>
+  /** Per-section visibility + price overrides, so the node applies the same
+   *  filtering the cloud's get_menu_for_table does — without a cloud round-trip.
+   *  Match a table's section code here; absent or filtered=false → show all. */
+  sections?: Array<{
+    code: string
+    name: string
+    filtered: boolean
+    visible_item_ids: string[]
+    price_overrides: Record<string, string>
+  }>
 }
 
 export interface PrinterRow {

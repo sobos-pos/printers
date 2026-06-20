@@ -5,7 +5,7 @@ from django.db.models import Prefetch
 
 from core.models import SyncOutbox
 from menu.models import MenuCategory, MenuItem, MenuVersion, Modifier, Variant
-from tables.models import Table
+from tables.models import Section, Table
 
 
 class MenuService:
@@ -58,20 +58,11 @@ class MenuService:
         visible_item_ids: set[str] | None = None    # None = everything is visible
 
         if section is not None:
-            section_menus = list(
-                section.section_menus
-                .select_related('menu')
-                .prefetch_related('menu__listings__item')
-            )
-            if section_menus:
+            filtered, visible, overrides = MenuService._section_visibility(section)
+            if filtered:
                 # Section has explicit menus → only listed items are visible.
-                visible_item_ids = set()
-                for sm in section_menus:
-                    for listing in sm.menu.listings.all():
-                        item_id_str = str(listing.item_id)
-                        visible_item_ids.add(item_id_str)
-                        if listing.price_override is not None:
-                            price_overrides[item_id_str] = listing.price_override
+                visible_item_ids = visible
+                price_overrides = overrides
 
         categories = (
             MenuCategory.objects.filter(location=location, is_active=True)
@@ -91,6 +82,33 @@ class MenuService:
                 categories, visible_item_ids, price_overrides
             ),
         }
+
+    @staticmethod
+    def _section_visibility(section) -> tuple[bool, set[str], dict[str, Decimal]]:
+        """Compute (filtered, visible_item_ids, price_overrides) for one section.
+
+        filtered=False means the section has no menus assigned → every item in
+        the location catalogue is visible (the implicit full-menu fallback).
+        When True, only the returned item ids are visible and price_overrides
+        replaces the displayed/base price for the listed items.
+        """
+        section_menus = list(
+            section.section_menus
+            .select_related('menu')
+            .prefetch_related('menu__listings')
+        )
+        if not section_menus:
+            return False, set(), {}
+
+        visible: set[str] = set()
+        overrides: dict[str, Decimal] = {}
+        for sm in section_menus:
+            for listing in sm.menu.listings.all():
+                item_id_str = str(listing.item_id)
+                visible.add(item_id_str)
+                if listing.price_override is not None:
+                    overrides[item_id_str] = listing.price_override
+        return True, visible, overrides
 
     # -- serialization ------------------------------------------------------
 
@@ -257,9 +275,30 @@ class MenuService:
             .order_by('display_order')
         )
 
+        # Per-section visibility + price overrides so the node can apply the
+        # same section filtering locally (offline-first / LAN path) instead of
+        # serving the full catalogue to every table. The node matches a table's
+        # section code against this list; absent or filtered=False → show all.
+        sections = (
+            Section.objects.filter(location=location, is_active=True)
+            .prefetch_related('section_menus__menu__listings')
+            .order_by('display_order')
+        )
+        sections_payload = []
+        for sec in sections:
+            filtered, visible, overrides = MenuService._section_visibility(sec)
+            sections_payload.append({
+                'code': sec.code,
+                'name': sec.name,
+                'filtered': filtered,
+                'visible_item_ids': sorted(visible),
+                'price_overrides': {k: str(v) for k, v in overrides.items()},
+            })
+
         return {
             'version': menu_version.version,
             'categories': MenuService._serialize_categories(categories),
+            'sections': sections_payload,
         }
 
     @staticmethod

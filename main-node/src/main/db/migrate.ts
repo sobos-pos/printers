@@ -3,6 +3,7 @@ import { migration002 } from './migrations/002_cluster'
 import { migration003 } from './migrations/003_label_assignments'
 import { migration004 } from './migrations/004_print_routes'
 import { migration005 } from './migrations/005_kitchens_sections'
+import { migration006 } from './migrations/006_table_label'
 import { getDb } from './connection'
 
 const MIGRATIONS: Array<{ name: string; sql: string }> = [
@@ -11,6 +12,7 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '003_label_assignments.sql', sql: migration003 },
   { name: '004_print_routes.sql', sql: migration004 },
   { name: '005_kitchens_sections.sql', sql: migration005 },
+  { name: '006_table_label.sql', sql: migration006 },
 ]
 
 export function runMigrations(): void {

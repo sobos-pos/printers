@@ -67,27 +67,10 @@ export const menuSyncService = {
     }
     if (!menuCacheRepository.isEmpty(config.locationId)) return
 
-    // Prefer full table menu (includes table label) when BOOTSTRAP_TABLE_UUID is set
-    if (config.bootstrapTableUuid) {
-      try {
-        const res = await fetch(
-          `${config.cloudBaseUrl}/api/v1/tables/${config.bootstrapTableUuid}/menu/`,
-        )
-        if (res.ok) {
-          const data = await res.json()
-          menuCacheRepository.upsert(
-            config.locationId,
-            data.menu_version ?? 0,
-            data,
-          )
-          console.log('[Menu] Bootstrapped from table menu endpoint')
-          return
-        }
-      } catch (err) {
-        console.warn('[Menu] Table menu bootstrap failed:', err)
-      }
-    }
-
+    // Always cache the full location snapshot — it carries the catalogue AND the
+    // per-section visibility/price-override block the node needs to filter every
+    // table correctly. (The per-table endpoint only returns one section's
+    // filtered view with no `sections` block, so it must NOT seed the cache.)
     await this.fetchAndCacheMenu(0)
   },
 }

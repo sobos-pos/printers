@@ -72,10 +72,15 @@ async function bootstrapAsync(): Promise<void> {
         const { menuService } = await import('./services/menuService')
         let warmed = 0
         for (const t of tables) {
-          if (t.section) {
-            menuService.storeSectionForTable(t.id, t.section.code, t.section.name)
-            warmed++
-          }
+          // Store the label for every table (so receipts print "Table: T1"),
+          // and the section when assigned (else fall back to COUNTER routing).
+          menuService.storeSectionForTable(
+            t.id,
+            t.section?.code ?? 'COUNTER',
+            t.section?.name ?? '',
+            t.label,
+          )
+          if (t.section) warmed++
         }
         console.log(`[Boot] Warmed ${warmed}/${tables.length} table→section mappings`)
       } catch (err) {

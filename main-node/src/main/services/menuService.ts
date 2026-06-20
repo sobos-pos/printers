@@ -3,28 +3,80 @@ import { menuCacheRepository } from '../repositories/menuCacheRepository'
 import { tableSectionRepository } from '../repositories/tableSectionRepository'
 import type { MenuCachePayload } from '../types'
 
+type CachedCategory = MenuCachePayload['categories'][0]
+type CachedSection = NonNullable<MenuCachePayload['sections']>[0]
+
 export const menuService = {
   getMenuForTable(tableUuid: string): Record<string, unknown> | null {
     const cached = menuCacheRepository.get(config.locationId)
     if (!cached) return null
 
     const payload = cached.payload
-    const categories = payload.categories ?? []
-    let table = payload.table
+    const allCategories = payload.categories ?? []
 
-    if (!table) {
-      table = { id: tableUuid, label: tableUuid.slice(0, 8).toUpperCase() }
+    // Resolve the table's section from the local mapping (warmup / menu-serve).
+    const mapping = tableSectionRepository.get(tableUuid)
+    const sectionCode = mapping?.section_code ?? null
+    const sectionMeta = sectionCode
+      ? this.findSection(payload, sectionCode)
+      : null
+
+    const tableObj: Record<string, unknown> = {
+      id: tableUuid,
+      label: mapping?.table_label || this.resolveTableLabel(tableUuid),
+    }
+    if (sectionMeta) {
+      tableObj.section = { code: sectionMeta.code, name: sectionMeta.name }
     }
 
-    const tableObj = table.id === tableUuid
-      ? table
-      : { id: tableUuid, label: table.label ?? 'Table', section: table.section }
+    // Apply the same section filtering the cloud's get_menu_for_table does:
+    // when the section has explicit menus (filtered=true), only listed items
+    // are visible and price overrides replace the displayed base price.
+    const categories =
+      sectionMeta && sectionMeta.filtered
+        ? this.applySectionFilter(allCategories, sectionMeta)
+        : allCategories
 
     return {
       table: tableObj,
       menu_version: cached.menu_version,
       categories,
     }
+  },
+
+  /** Filter categories to a section's visible items + apply price overrides,
+   *  dropping categories left with no items. */
+  applySectionFilter(categories: CachedCategory[], section: CachedSection): CachedCategory[] {
+    const visible = new Set(section.visible_item_ids)
+    const overrides = section.price_overrides ?? {}
+    const result: CachedCategory[] = []
+    for (const cat of categories) {
+      const items = (cat.items ?? [])
+        .filter((i) => visible.has(i.id))
+        .map((i) =>
+          overrides[i.id] !== undefined ? { ...i, base_price: overrides[i.id] } : i,
+        )
+      if (items.length > 0) result.push({ ...cat, items })
+    }
+    return result
+  },
+
+  findSection(payload: MenuCachePayload, sectionCode: string): CachedSection | null {
+    return (payload.sections ?? []).find((s) => s.code === sectionCode) ?? null
+  },
+
+  /** Section price override for an item, or null. Used by order pricing so a
+   *  locally-created bill charges the section price (e.g. bar markup). */
+  getPriceOverride(sectionCode: string | null, menuItemId: string): number | null {
+    if (!sectionCode) return null
+    const cached = menuCacheRepository.get(config.locationId)
+    if (!cached) return null
+    const section = this.findSection(cached.payload, sectionCode)
+    if (!section || !section.filtered) return null
+    const raw = section.price_overrides?.[menuItemId]
+    if (raw === undefined) return null
+    const value = parseFloat(raw)
+    return Number.isFinite(value) ? value : null
   },
 
   findMenuItem(menuItemId: string): {
@@ -42,6 +94,9 @@ export const menuService = {
   },
 
   resolveTableLabel(tableUuid: string): string {
+    // Prefer the cached label (works for every table, not just the bootstrap one).
+    const label = tableSectionRepository.getLabel(tableUuid)
+    if (label) return label
     const cached = menuCacheRepository.get(config.locationId)
     if (cached?.payload.table?.id === tableUuid) return cached.payload.table.label
     return tableUuid.slice(0, 8).toUpperCase()
@@ -54,9 +109,14 @@ export const menuService = {
     return tableSectionRepository.getSectionCode(tableUuid)
   },
 
-  /** Persist the section mapping from the menu response so future local orders
-   *  can route the BILL without a cloud round-trip. */
-  storeSectionForTable(tableUuid: string, sectionCode: string, sectionName: string): void {
-    tableSectionRepository.upsert(tableUuid, sectionCode, sectionName)
+  /** Persist the section mapping (and label when known) so future local orders
+   *  route the BILL and print the table label without a cloud round-trip. */
+  storeSectionForTable(
+    tableUuid: string,
+    sectionCode: string,
+    sectionName: string,
+    tableLabel = '',
+  ): void {
+    tableSectionRepository.upsert(tableUuid, sectionCode, sectionName, tableLabel)
   },
 }

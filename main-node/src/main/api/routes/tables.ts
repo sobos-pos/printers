@@ -26,12 +26,15 @@ export function registerTableRoutes(app: FastifyInstance): void {
       // Persist section mapping so local orders can route the BILL without a
       // cloud round-trip. The section comes from the cloud menu response; it is
       // null if the table has no section assigned yet (falls back to COUNTER).
-      const tableData = data.table as { id?: string; section?: { code: string; name: string } } | undefined
-      if (tableData?.id && tableData.section) {
+      const tableData = data.table as
+        | { id?: string; label?: string; section?: { code: string; name: string } }
+        | undefined
+      if (tableData?.id) {
         menuService.storeSectionForTable(
           tableData.id,
-          tableData.section.code,
-          tableData.section.name,
+          tableData.section?.code ?? 'COUNTER',
+          tableData.section?.name ?? '',
+          tableData.label ?? '',
         )
       }
 

@@ -62,12 +62,15 @@ function serializeOrder(order: LocalOrder): SerializedOrder {
   }
 }
 
-function buildLineItems(items: BulkOrderItem[]) {
+function buildLineItems(items: BulkOrderItem[], sectionCode: string | null = null) {
   return items.map((itemData) => {
     const found = menuService.findMenuItem(itemData.menu_item)
     if (!found) throw new Error(`Menu item not found: ${itemData.menu_item}`)
 
-    let unitPrice = parseFloat(found.item.base_price)
+    // Section price override (e.g. bar markup) replaces the catalogue base price.
+    // A selected variant still wins, mirroring the cloud's get_menu_for_table.
+    const override = menuService.getPriceOverride(sectionCode, itemData.menu_item)
+    let unitPrice = override ?? parseFloat(found.item.base_price)
     let variantName: string | null = null
     if (itemData.variant) {
       const variant = found.item.variants?.find((v) => v.id === itemData.variant)
@@ -114,15 +117,15 @@ export const orderService = {
   },
 
   createLocalOrder(input: CreateOrderInput): SerializedOrder {
-    const lineItems = buildLineItems(input.items)
+    // Resolve section first: it drives BILL routing AND section price overrides.
+    const sectionCode = menuService.resolveSectionCode(input.table_uuid ?? null)
+
+    const lineItems = buildLineItems(input.items, sectionCode)
     const total = lineItems.reduce(
       (sum, li) =>
         sum + li.unit_price * li.quantity + li.modifiers.reduce((s, m) => s + m.price, 0) * li.quantity,
       0,
     )
-
-    // Resolve section for BILL routing before inserting the order.
-    const sectionCode = menuService.resolveSectionCode(input.table_uuid ?? null)
 
     const orderId = orderRepository.newId()
     orderRepository.insertOrder(
