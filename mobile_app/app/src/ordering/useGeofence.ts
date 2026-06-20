@@ -7,7 +7,7 @@
 // coordinates at clock-in/out time.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AppState } from 'react-native'
+import { AppState, Linking } from 'react-native'
 import { useAuth } from '../auth/store'
 import { readDeviceCoords, type GeoPermission } from '../lib/deviceLocation'
 import { evaluateGeofence, hasGeofence, type GeofenceCheck } from '../lib/geo'
@@ -34,15 +34,19 @@ export interface GeofenceState {
   /** False when expo-location isn't in the installed dev build. */
   locationNativeAvailable: boolean
   permission: GeoPermission
+  /** False when the user must open system Settings to grant location. */
+  canAskAgain: boolean
   loading: boolean
   coords: Coords | null
   check: GeofenceCheck
   error: string | null
   /** Re-request permission (when prompt) and refresh the current position. */
   refresh: (prompt?: boolean) => Promise<void>
+  /** Open the app's page in system Settings (after permanent denial). */
+  openSettings: () => Promise<void>
   /**
-   * Force a fresh GPS read (maximumAge: 0). Updates hook state and returns coords.
-   * Returns null when unavailable; sets `error` when the read fails or permission denied.
+   * Force a fresh GPS read. Updates hook state and returns coords.
+   * Pass prompt=true to show the OS permission dialog when needed.
    */
   getFreshCoords: (prompt?: boolean) => Promise<Coords | null>
 }
@@ -57,52 +61,62 @@ export function useGeofence(options: UseGeofenceOptions = {}): GeofenceState {
   const geofenceEnabled = locationConfigured && locationNativeAvailable
 
   const [permission, setPermission] = useState<GeoPermission>('undetermined')
+  const [canAskAgain, setCanAskAgain] = useState(true)
   const [coords, setCoords] = useState<Coords | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const inFlight = useRef(false)
+  const bgInFlight = useRef(false)
 
   const applyRead = useCallback((result: Awaited<ReturnType<typeof readDeviceCoords>>) => {
     setPermission(result.permission)
+    setCanAskAgain(result.canAskAgain)
     setCoords(result.coords)
     setError(result.error)
     return result.coords
   }, [])
 
-  const refresh = useCallback(
-    async (prompt = false) => {
-      if (inFlight.current) return
+  const runRead = useCallback(
+    async (prompt: boolean, userInitiated: boolean) => {
       if (!Location) {
         setError(null)
-        return
+        return null
       }
-      inFlight.current = true
+      // Background polls yield to user-initiated permission requests.
+      if (bgInFlight.current && !userInitiated) return null
+
+      if (userInitiated) bgInFlight.current = true
+      else if (bgInFlight.current) return null
+      else bgInFlight.current = true
+
       setLoading(true)
-      setError(null)
+      if (userInitiated) setError(null)
       try {
-        applyRead(await readDeviceCoords({ prompt }))
+        return applyRead(await readDeviceCoords({ prompt }))
       } finally {
         setLoading(false)
-        inFlight.current = false
+        bgInFlight.current = false
       }
     },
     [Location, applyRead],
   )
 
+  const refresh = useCallback(
+    async (prompt = false) => {
+      await runRead(prompt, prompt)
+    },
+    [runRead],
+  )
+
   const getFreshCoords = useCallback(
     async (prompt = false): Promise<Coords | null> => {
-      if (!Location) return null
-      setLoading(true)
-      setError(null)
-      try {
-        const result = await readDeviceCoords({ prompt })
-        return applyRead(result)
-      } finally {
-        setLoading(false)
-      }
+      return runRead(prompt, prompt)
     },
-    [Location, applyRead],
+    [runRead],
   )
+
+  const openSettings = useCallback(async () => {
+    await Linking.openSettings()
+  }, [])
 
   // Initial read: prompt when the location is geofenced (we genuinely need it),
   // otherwise best-effort silent (capture coords for the audit trail if already granted).
@@ -110,8 +124,7 @@ export function useGeofence(options: UseGeofenceOptions = {}): GeofenceState {
     refresh(locationConfigured && locationNativeAvailable)
   }, [locationConfigured, locationNativeAvailable, targetLocation?.id, refresh])
 
-  // Re-check when the app returns to foreground — the user may have just toggled
-  // location services or walked into range.
+  // Re-check when the app returns to foreground — user may have just granted in Settings.
   useEffect(() => {
     if (!Location) return
     const sub = AppState.addEventListener('change', (state) => {
@@ -124,7 +137,7 @@ export function useGeofence(options: UseGeofenceOptions = {}): GeofenceState {
   useEffect(() => {
     if (!watchActive || !geofenceEnabled) return
     const id = setInterval(() => {
-      if (!inFlight.current) refresh(false)
+      if (!bgInFlight.current) refresh(false)
     }, WATCH_INTERVAL_MS)
     return () => clearInterval(id)
   }, [watchActive, geofenceEnabled, refresh])
@@ -150,11 +163,13 @@ export function useGeofence(options: UseGeofenceOptions = {}): GeofenceState {
     geofenceEnabled,
     locationNativeAvailable,
     permission,
+    canAskAgain,
     loading,
     coords,
     check,
     error: buildError,
     refresh,
+    openSettings,
     getFreshCoords,
   }
 }

@@ -249,8 +249,9 @@ function ClockBar({
     const { geofenceEnabled, locationConfigured, permission, check, loading: geoLoading, coords } =
       geo
     const nativeModuleMissing = locationConfigured && !geo.locationNativeAvailable
-    const locating = geofenceEnabled && geoLoading && !coords
-    const permissionBlocked = geofenceEnabled && permission !== 'granted' && !geoLoading
+    const needsPermission = geofenceEnabled && permission !== 'granted'
+    const locating = geofenceEnabled && geoLoading && permission === 'granted' && !coords
+    const permissionBlocked = needsPermission
     const outOfRange = geofenceEnabled && permission === 'granted' && !check.within
     const blocked = locating || permissionBlocked || outOfRange || nativeModuleMissing
 
@@ -263,7 +264,9 @@ function ClockBar({
     } else if (locating) {
       info = 'Finding your location…'
     } else if (permissionBlocked) {
-      info = 'Location permission needed to clock in'
+      info = geo.canAskAgain
+        ? 'Location permission needed to clock in'
+        : 'Location denied — open Settings to allow access'
       tone = 'danger'
     } else if (outOfRange) {
       info =
@@ -290,8 +293,14 @@ function ClockBar({
           <Text style={styles.clockLabel}>Not clocked in</Text>
           <View style={styles.clockActions}>
             {permissionBlocked && (
-              <Pressable style={styles.linkBtn} onPress={() => geo.refresh(true)}>
-                <Text style={styles.linkBtnText}>Enable</Text>
+              <Pressable
+                style={styles.linkBtn}
+                onPress={() => (geo.canAskAgain ? geo.refresh(true) : geo.openSettings())}
+                disabled={geoLoading}
+              >
+                <Text style={styles.linkBtnText}>
+                  {geoLoading ? '…' : geo.canAskAgain ? 'Enable' : 'Settings'}
+                </Text>
               </Pressable>
             )}
             {outOfRange && (

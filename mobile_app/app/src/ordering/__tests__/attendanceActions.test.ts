@@ -20,11 +20,13 @@ function mockGeo(overrides: Partial<GeofenceState> = {}): GeofenceState {
     geofenceEnabled: true,
     locationNativeAvailable: true,
     permission: 'granted',
+    canAskAgain: true,
     loading: false,
     coords: null,
     check: { within: true, distanceM: 0, radiusM: 200 },
     error: null,
     refresh: jest.fn(async () => {}),
+    openSettings: jest.fn(async () => {}),
     getFreshCoords: jest.fn(async () => ({ latitude: 12.9719, longitude: 77.6412 })),
     ...overrides,
   }

@@ -29,7 +29,7 @@ export async function resolveClockInCoords(geo: GeofenceState): Promise<Coords |
     )
   }
 
-  const coords = await geo.getFreshCoords(false)
+  const coords = await geo.getFreshCoords(true)
 
   if (geo.locationConfigured) {
     if (!coords) {
