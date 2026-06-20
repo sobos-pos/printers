@@ -64,8 +64,12 @@ export const syncPullService = {
     console.log(`[Poll] Event ${event.event_type} seq=${event.sequence}`)
 
     if (event.event_type === 'ORDER_CREATED') {
-      const order = orderService.ingestFromCloudPayload(event.payload, true)
+      const { order, created } = orderService.ingestFromCloudPayload(event.payload, true)
       if (!order) return
+      if (!created) {
+        console.log(`[Poll] Order ${order.id} already ingested — skipping duplicate print`)
+        return
+      }
       orderService.processCloudOrder(order)
       try {
         await cloudClient.pushStatus(order.id, 'Confirmed')

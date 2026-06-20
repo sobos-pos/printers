@@ -11,7 +11,8 @@ existing routes are never overwritten.  Intended for:
 
 from django.core.management.base import BaseCommand, CommandError
 
-from core.models import Location, PrintRoute
+from core.models import Location
+from core.services.print_route_service import ensure_print_routes, remove_legacy_kitchen_bill_routes
 from menu.models import Kitchen
 from tables.models import Section
 
@@ -46,41 +47,18 @@ class Command(BaseCommand):
                 )
 
         self.stdout.write(f'Seeding print routes for location: {location} ({location.id})')
-        created_total = 0
 
-        # KOT routes — one per Kitchen
-        kitchens = Kitchen.objects.filter(location=location, is_active=True)
-        if not kitchens.exists():
-            self.stdout.write(self.style.WARNING('  No active kitchens found — skipping KOT routes'))
-        for kitchen in kitchens:
-            for ptype in ['KOT', 'BILL']:
-                _, created = PrintRoute.objects.get_or_create(
-                    location=location,
-                    station_code=kitchen.code,
-                    print_type=ptype,
-                    defaults={'assigned_node': None},
-                )
-                if created:
-                    self.stdout.write(f'  Created route: {kitchen.code} / {ptype}')
-                    created_total += 1
-                else:
-                    self.stdout.write(f'  Exists:        {kitchen.code} / {ptype}')
-
-        # BILL routes — one per Section
-        sections = Section.objects.filter(location=location, is_active=True)
-        if not sections.exists():
-            self.stdout.write(self.style.WARNING('  No active sections found — skipping BILL routes'))
-        for section in sections:
-            _, created = PrintRoute.objects.get_or_create(
-                location=location,
-                station_code=section.code,
-                print_type='BILL',
-                defaults={'assigned_node': None},
+        removed = remove_legacy_kitchen_bill_routes(location)
+        if removed:
+            self.stdout.write(
+                self.style.WARNING(f'  Removed {removed} erroneous kitchen-only BILL route(s)')
             )
-            if created:
-                self.stdout.write(f'  Created route: {section.code} / BILL')
-                created_total += 1
-            else:
-                self.stdout.write(f'  Exists:        {section.code} / BILL')
+
+        created_total = ensure_print_routes(location)
+
+        for kitchen in Kitchen.objects.filter(location=location, is_active=True):
+            self.stdout.write(f'  KOT route:  {kitchen.code}')
+        for section in Section.objects.filter(location=location, is_active=True):
+            self.stdout.write(f'  BILL route: {section.code}')
 
         self.stdout.write(self.style.SUCCESS(f'Done — {created_total} new route(s) created'))

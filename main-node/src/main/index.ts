@@ -104,19 +104,8 @@ async function bootstrapAsync(): Promise<void> {
         })
         .catch((err) => console.warn('[Boot] Node inventory pull failed:', err))
 
-      await cloudClient
-        .fetchPrintRoutes()
-        .then(({ routes }) => {
-          printRouteRepository.upsertAll(
-            config.locationId,
-            routes.map((r) => ({
-              station_code: r.station_code,
-              print_type: r.print_type,
-              assigned_node_id: r.assigned_node_id,
-            })),
-          )
-          console.log(`[Boot] Seeded ${routes.length} print routes from Cloud`)
-        })
+      await import('./services/printRouteSyncService')
+        .then(({ syncPrintRoutesFromCloud }) => syncPrintRoutesFromCloud())
         .catch((err) => console.warn('[Boot] Print routes pull failed:', err))
 
       // Back up the current local printer config so a future replacement master
@@ -295,8 +284,14 @@ function registerIpc(): void {
 
     const { cloudClient } = await import('./services/cloudClient')
     const result = await cloudClient.savePrintRoutes(routes)
-    // Cache locally for print routing resolution
-    printRouteRepository.upsertAll(config.locationId, routes)
+    printRouteRepository.replaceAll(
+      config.locationId,
+      (routes ?? []).map((r: { station_code: string; print_type: string; assigned_node_id: string | null }) => ({
+        station_code: r.station_code,
+        print_type: r.print_type,
+        assigned_node_id: r.assigned_node_id ?? null,
+      })),
+    )
     // Persist the local config blob to Cloud so a fresh master can restore it
     const { nodeConfigService } = await import('./services/nodeConfigService')
     await nodeConfigService.backupConfig().catch((err) =>
@@ -476,6 +471,7 @@ function registerIpc(): void {
       'remote_print_jobs',
       'cluster_nodes',
       'node_state',
+      'print_route_nodes',
       'print_routes',
       'printers',
       'menu_cache',

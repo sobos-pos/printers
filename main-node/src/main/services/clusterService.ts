@@ -123,6 +123,10 @@ export const clusterService = {
     this.stop()
     workerManager.startWorkers('leader')
     this.start()
+
+    import('./printRouteSyncService')
+      .then(({ syncPrintRoutesFromCloud }) => syncPrintRoutesFromCloud())
+      .catch((err) => console.warn('[Cluster] Print route sync after leader promotion failed:', err))
   },
 
   switchToFollower(leaderHost: string, leaderPort: number, leaderNodeId: string): void {

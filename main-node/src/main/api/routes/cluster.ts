@@ -71,13 +71,21 @@ export function registerClusterRoutes(app: FastifyInstance): void {
       return
     }
 
+    // Idempotent receive — leader may retry forward after a crash before markForwarded.
+    const existingRemote = getDb()
+      .prepare('SELECT job_id FROM remote_print_jobs WHERE job_id = ?')
+      .get(job_id)
+    if (existingRemote) {
+      return { job_id, status: 'QUEUED' }
+    }
+
     // Save to remote_print_jobs
     getDb().prepare(
       `INSERT INTO remote_print_jobs (job_id, order_id, station, job_type, payload, status, received_at)
-       VALUES (?, ?, ?, ?, ?, 'RECEIVED', ?)`
+       VALUES (?, ?, ?, ?, ?, 'RECEIVED', ?)`,
     ).run(job_id, order_id, station, job_type, JSON.stringify(payload), new Date().toISOString())
 
-    // Enqueue in local print_jobs queue
+    // Enqueue in local print_jobs queue (enqueue is idempotent for same job id)
     const { printJobRepository } = await import('../../repositories/printJobRepository')
     printJobRepository.enqueue({
       id: job_id,

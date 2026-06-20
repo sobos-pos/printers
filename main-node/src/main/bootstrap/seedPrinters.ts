@@ -40,7 +40,6 @@ export function configurePrinterFromEnv(): void {
   for (const [station, jobType] of [
     ['KITCHEN', 'KOT'],
     ['BAR', 'KOT'],
-    ['KITCHEN', 'BILL'],
     ['COUNTER', 'BILL'],
     ['DEFAULT', 'BILL'],
   ] as const) {
@@ -62,7 +61,6 @@ function dbSeedSimulated(): void {
   for (const [station, jobType] of [
     ['KITCHEN', 'KOT'],
     ['BAR', 'KOT'],
-    ['KITCHEN', 'BILL'],
     ['COUNTER', 'BILL'],
     ['DEFAULT', 'BILL'],
   ] as const) {

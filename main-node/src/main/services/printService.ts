@@ -36,13 +36,34 @@ export const printService = {
       if (route.fallback_printer_id) return route.fallback_printer_id
       return route.printer_id
     }
-    // 2. Same node's KITCHEN mapping for this type — covers the common
-    //    single-printer setup where everything funnels to one printer.
-    const kitchen = printerRepository.getRoute('KITCHEN', jobType)
-    if (kitchen?.printer_id) return kitchen.printer_id
-    // 3. Last resort: this node's first enabled printer, so a fallback print
-    //    (e.g. the leader taking over an offline follower's station) is never
-    //    dropped just because no explicit mapping exists for that station.
+
+    if (jobType === 'BILL') {
+      // BILL routes are per-section (DEFAULT, COUNTER, …), never per-kitchen.
+      for (const fallbackStation of ['DEFAULT', 'COUNTER']) {
+        if (fallbackStation === station) continue
+        const billRoute = printerRepository.getRoute(fallbackStation, 'BILL')
+        if (billRoute?.printer_id) {
+          const printer = printerRepository.getPrinter(billRoute.printer_id)
+          if (printer && printer.enabled) return printer.id
+          if (billRoute.fallback_printer_id) return billRoute.fallback_printer_id
+          return billRoute.printer_id
+        }
+      }
+      // Single-printer setup: no section BILL mapped yet — reuse the kitchen KOT printer.
+      const kitchenKot = printerRepository.getRoute('KITCHEN', 'KOT')
+      if (kitchenKot?.printer_id) {
+        const printer = printerRepository.getPrinter(kitchenKot.printer_id)
+        if (printer && printer.enabled) return printer.id
+        if (kitchenKot.fallback_printer_id) return kitchenKot.fallback_printer_id
+        return kitchenKot.printer_id
+      }
+    } else {
+      // 2. Same node's KITCHEN mapping for KOT — common single-printer setup.
+      const kitchen = printerRepository.getRoute('KITCHEN', jobType)
+      if (kitchen?.printer_id) return kitchen.printer_id
+    }
+
+    // 3. Last resort: first enabled printer on this node.
     const fallback = printerRepository.getAllPrinters().find((p) => p.enabled)
     return fallback?.id ?? null
   },
@@ -82,6 +103,11 @@ export const printService = {
     sectionCode: string,
     meta?: { table?: string | null; placedAt?: string; total?: number },
   ): void {
+    if (printJobRepository.hasBillForOrder(orderId)) {
+      console.log(`[Print] BILL already queued/printed for order ${orderId} — skipping duplicate`)
+      return
+    }
+
     const billLines = order.items.map((item) => ({
       qty: item.quantity,
       name: item.name_snapshot,
@@ -112,10 +138,24 @@ export const printService = {
   },
 
   async processDueJobs(): Promise<void> {
-    const jobs = printJobRepository.getDueJobs()
+    const g = globalThis as typeof globalThis & { __sobossPrintDraining?: boolean }
+    if (g.__sobossPrintDraining) return
+    g.__sobossPrintDraining = true
+
+    try {
+      await this.drainDueJobs()
+    } finally {
+      g.__sobossPrintDraining = false
+    }
+  },
+
+  async drainDueJobs(): Promise<void> {
     const paperWidth: PaperWidth = config.paperWidth
 
-    for (const job of jobs) {
+    while (true) {
+      const job = printJobRepository.claimNextDueJob()
+      if (!job) break
+
       if (job.attempt_count >= config.printRetryMaxAttempts) {
         printJobRepository.markFailed(job.id, 'Max retry attempts exceeded')
         continue
@@ -188,11 +228,12 @@ export const printService = {
 
       try {
         await driver.print(payload, ctx)
-        printJobRepository.markPrinted(job.id)
-        // Log on the node that actually printed it (leader or follower), so each
-        // node's KOT log reflects its own output.
-        recordPrintedKot(payload)
-        console.log(`[Print] Job ${job.id} → PRINTED locally`)
+        if (printJobRepository.markPrinted(job.id)) {
+          recordPrintedKot(payload)
+          console.log(`[Print] Job ${job.id} → PRINTED locally`)
+        } else {
+          console.warn(`[Print] Job ${job.id} already marked done — skipped duplicate log/output`)
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         const next = new Date(Date.now() + backoffDelayMs(job.attempt_count)).toISOString()

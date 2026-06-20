@@ -61,10 +61,14 @@
                         </div>
                         <div class="form-group">
                             <label class="form-label">Geofence (clock-in zone) — optional</label>
-                            <div style="display: flex; gap: 0.5rem;">
-                                <input class="form-control" type="number" step="any" name="latitude" placeholder="Latitude (e.g. 28.6139)">
-                                <input class="form-control" type="number" step="any" name="longitude" placeholder="Longitude (e.g. 77.2090)">
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                                <input class="form-control" type="number" step="any" id="branch_latitude" name="latitude" placeholder="Latitude (e.g. 28.6139)" style="flex: 1; min-width: 8rem;">
+                                <input class="form-control" type="number" step="any" id="branch_longitude" name="longitude" placeholder="Longitude (e.g. 77.2090)" style="flex: 1; min-width: 8rem;">
+                                <button class="btn btn-secondary" type="button" id="branch_use_current_location" style="white-space: nowrap; padding: 0.55rem 0.9rem;">
+                                    Use current location
+                                </button>
                             </div>
+                            <p id="branch_geolocation_status" style="color: var(--text-muted, #888); font-size: 0.85rem; margin: 0.35rem 0 0; min-height: 1.2em;" aria-live="polite"></p>
                             <input class="form-control" type="number" min="10" name="geofence_radius_m" value="200" placeholder="Radius (metres)" style="margin-top: 0.5rem;">
                             <small style="color: var(--text-muted, #888); display: block; margin-top: 0.35rem;">
                                 Leave latitude &amp; longitude blank to let staff clock in from anywhere.
@@ -342,6 +346,59 @@
                 console.error('Could not copy text: ', err);
             });
         }
+
+        (function () {
+            var btn = document.getElementById('branch_use_current_location');
+            var latInput = document.getElementById('branch_latitude');
+            var lngInput = document.getElementById('branch_longitude');
+            var statusEl = document.getElementById('branch_geolocation_status');
+            if (!btn || !latInput || !lngInput || !statusEl) return;
+
+            function setStatus(message, isError) {
+                statusEl.textContent = message;
+                statusEl.style.color = isError ? '#f87171' : 'var(--text-muted, #888)';
+            }
+
+            btn.addEventListener('click', function () {
+                if (!navigator.geolocation) {
+                    setStatus('Geolocation is not supported in this browser.', true);
+                    return;
+                }
+
+                var originalLabel = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = 'Locating…';
+                setStatus('Requesting your location…', false);
+
+                navigator.geolocation.getCurrentPosition(
+                    function (pos) {
+                        latInput.value = pos.coords.latitude.toFixed(6);
+                        lngInput.value = pos.coords.longitude.toFixed(6);
+                        var accuracy = Math.round(pos.coords.accuracy);
+                        setStatus(
+                            'Filled from your current location (±' + accuracy + ' m). Adjust if needed.',
+                            false
+                        );
+                        btn.disabled = false;
+                        btn.textContent = originalLabel;
+                    },
+                    function (err) {
+                        var msg = 'Could not read your location.';
+                        if (err.code === err.PERMISSION_DENIED) {
+                            msg = 'Location permission denied. Allow location access for this site and try again.';
+                        } else if (err.code === err.POSITION_UNAVAILABLE) {
+                            msg = 'Location unavailable. Check that GPS / location services are enabled.';
+                        } else if (err.code === err.TIMEOUT) {
+                            msg = 'Location request timed out. Try again.';
+                        }
+                        setStatus(msg, true);
+                        btn.disabled = false;
+                        btn.textContent = originalLabel;
+                    },
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+                );
+            });
+        })();
     </script>
 </body>
 </html>

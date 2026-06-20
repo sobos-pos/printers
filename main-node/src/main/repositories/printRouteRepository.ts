@@ -22,15 +22,19 @@ export const printRouteRepository = {
   },
 
   upsertAll(locationId: string, routes: Array<{ station_code: string; print_type: string; assigned_node_id: string | null }>): void {
-    const stmt = getDb().prepare(
+    this.replaceAll(locationId, routes)
+  },
+
+  /** Replace the full route set for a location (drops stale rows removed on cloud). */
+  replaceAll(locationId: string, routes: Array<{ station_code: string; print_type: string; assigned_node_id: string | null }>): void {
+    const insert = getDb().prepare(
       `INSERT INTO print_route_nodes (location_id, station_code, print_type, assigned_node_id)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(location_id, station_code, print_type) DO UPDATE SET
-         assigned_node_id = excluded.assigned_node_id`
+       VALUES (?, ?, ?, ?)`,
     )
     const run = getDb().transaction(() => {
+      getDb().prepare('DELETE FROM print_route_nodes WHERE location_id = ?').run(locationId)
       for (const r of routes) {
-        stmt.run(locationId, r.station_code, r.print_type, r.assigned_node_id ?? null)
+        insert.run(locationId, r.station_code, r.print_type, r.assigned_node_id ?? null)
       }
     })
     run()

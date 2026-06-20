@@ -30,6 +30,19 @@ export const printJobRepository = {
     return id
   },
 
+  /** True when a BILL job is already queued or printed for this order. */
+  hasBillForOrder(orderId: string): boolean {
+    const row = getDb()
+      .prepare(
+        `SELECT 1 FROM print_jobs
+         WHERE order_id = ? AND job_type = 'BILL'
+           AND status IN ('PENDING', 'RETRYING', 'PRINTED', 'FORWARDED')
+         LIMIT 1`,
+      )
+      .get(orderId)
+    return Boolean(row)
+  },
+
   getDueJobs(): PrintJobRow[] {
     const now = nowIso()
     return getDb()
@@ -42,10 +55,66 @@ export const printJobRepository = {
       .all(now) as PrintJobRow[]
   },
 
-  markPrinted(id: string): void {
-    getDb()
-      .prepare(`UPDATE print_jobs SET status = 'PRINTED', updated_at = ?, last_error = NULL WHERE id = ?`)
-      .run(nowIso(), id)
+  /**
+   * Atomically pick the oldest due job and mark it PRINTING.
+   * Unlike getDueJobs()+claimJob(), this cannot hand two workers the same job
+   * from a stale in-memory snapshot (e.g. duplicate dev timers / HMR reload).
+   */
+  claimNextDueJob(): PrintJobRow | null {
+    const db = getDb()
+    return db.transaction(() => {
+      const now = nowIso()
+      const row = db
+        .prepare(
+          `SELECT * FROM print_jobs
+           WHERE status IN ('PENDING', 'RETRYING')
+             AND (next_retry_at IS NULL OR next_retry_at <= ?)
+           ORDER BY created_at ASC
+           LIMIT 1`,
+        )
+        .get(now) as PrintJobRow | undefined
+      if (!row) return null
+
+      const claimed = db
+        .prepare(
+          `UPDATE print_jobs SET status = 'PRINTING', updated_at = ?
+           WHERE id = ? AND status IN ('PENDING', 'RETRYING')`,
+        )
+        .run(now, row.id) as { changes: number }
+      if (claimed.changes !== 1) return null
+      return row
+    })()
+  },
+
+  /** Atomically mark a job in-flight so overlapping worker ticks cannot print it twice. */
+  claimJob(id: string): boolean {
+    const result = getDb()
+      .prepare(
+        `UPDATE print_jobs SET status = 'PRINTING', updated_at = ?
+         WHERE id = ? AND status IN ('PENDING', 'RETRYING')`,
+      )
+      .run(nowIso(), id) as { changes: number }
+    return result.changes === 1
+  },
+
+  /** Recover jobs left PRINTING after a crash or forced restart. */
+  resetStalePrinting(): number {
+    const result = getDb()
+      .prepare(
+        `UPDATE print_jobs SET status = 'PENDING', updated_at = ? WHERE status = 'PRINTING'`,
+      )
+      .run(nowIso()) as { changes: number }
+    return result.changes
+  },
+
+  markPrinted(id: string): boolean {
+    const result = getDb()
+      .prepare(
+        `UPDATE print_jobs SET status = 'PRINTED', updated_at = ?, last_error = NULL
+         WHERE id = ? AND status = 'PRINTING'`,
+      )
+      .run(nowIso(), id) as { changes: number }
+    return result.changes === 1
   },
 
   // Terminal status for a job handed off to a follower node. Distinct from

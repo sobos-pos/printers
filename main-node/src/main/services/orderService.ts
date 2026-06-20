@@ -180,10 +180,13 @@ export const orderService = {
     return true
   },
 
-  ingestFromCloudPayload(payload: Record<string, unknown>, orIgnore = true): LocalOrder | null {
+  ingestFromCloudPayload(
+    payload: Record<string, unknown>,
+    orIgnore = true,
+  ): { order: LocalOrder | null; created: boolean } {
     const orderId = String(payload.id)
     if (orIgnore && orderRepository.exists(orderId)) {
-      return orderRepository.getById(orderId)
+      return { order: orderRepository.getById(orderId), created: false }
     }
 
     const items = (payload.items as Array<Record<string, unknown>>) ?? []
@@ -224,8 +227,10 @@ export const orderService = {
       orIgnore,
     )
 
-    if (!inserted && orIgnore) return orderRepository.getById(orderId)
-    return orderRepository.getById(orderId)
+    if (!inserted && orIgnore) {
+      return { order: orderRepository.getById(orderId), created: false }
+    }
+    return { order: orderRepository.getById(orderId), created: inserted }
   },
 
   processCloudOrder(order: LocalOrder): void {

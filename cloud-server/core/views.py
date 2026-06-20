@@ -961,10 +961,26 @@ class SyncPrintRoutesView(View):
             return err
 
         from core.models import PrintRoute
-        from menu.models import PrinterStation
+        from core.services.print_route_service import (
+            ensure_print_routes,
+            is_valid_route,
+            station_name,
+        )
+        from menu.models import Kitchen
+        from tables.models import Section
 
-        stations = list(PrinterStation.objects.filter(location=location).values('code', 'name'))
-        station_names = {s['code']: s['name'] for s in stations}
+        ensure_print_routes(location)
+
+        kitchens = list(
+            Kitchen.objects.filter(location=location, is_active=True)
+            .order_by('code')
+            .values('code', 'name')
+        )
+        sections = list(
+            Section.objects.filter(location=location, is_active=True)
+            .order_by('display_order', 'code')
+            .values('code', 'name')
+        )
 
         routes = []
         qs = PrintRoute.objects.filter(location=location).select_related('assigned_node')
@@ -972,7 +988,7 @@ class SyncPrintRoutesView(View):
             node = r.assigned_node
             routes.append({
                 'station_code': r.station_code,
-                'station_name': station_names.get(r.station_code, r.station_code),
+                'station_name': station_name(location, r.station_code, r.print_type),
                 'print_type': r.print_type,
                 'assigned_node_id': node.node_id if node else None,
                 'assigned_node_name': node.node_label if node else None,
@@ -980,7 +996,14 @@ class SyncPrintRoutesView(View):
             })
 
         return JsonResponse({
-            'stations': [{'code': s['code'], 'name': s['name']} for s in stations],
+            'kot_stations': [{'code': k['code'], 'name': k['name']} for k in kitchens],
+            'bill_stations': [{'code': s['code'], 'name': s['name']} for s in sections],
+            # Legacy union — prefer kot_stations / bill_stations in new clients.
+            'stations': [
+                {'code': k['code'], 'name': k['name'], 'print_type': 'KOT'} for k in kitchens
+            ] + [
+                {'code': s['code'], 'name': s['name'], 'print_type': 'BILL'} for s in sections
+            ],
             'print_types': [PrintRoute.PrintType.KOT, PrintRoute.PrintType.BILL],
             'routes': routes,
         })
@@ -998,14 +1021,20 @@ class SyncPrintRoutesView(View):
 
         from django.db import transaction
         from core.models import LocationNode, PrintRoute
+        from core.services.print_route_service import is_valid_route
 
         valid_types = {PrintRoute.PrintType.KOT, PrintRoute.PrintType.BILL}
         saved = 0
+        skipped = 0
         with transaction.atomic():
             for e in entries:
-                station_code = (e.get('station_code') or '').strip()
+                station_code = (e.get('station_code') or '').strip().upper()
                 print_type = e.get('print_type')
                 if not station_code or print_type not in valid_types:
+                    skipped += 1
+                    continue
+                if not is_valid_route(location, station_code, print_type):
+                    skipped += 1
                     continue
                 assigned_node_id = e.get('assigned_node_id')
                 node = None
@@ -1021,4 +1050,4 @@ class SyncPrintRoutesView(View):
                 )
                 saved += 1
 
-        return JsonResponse({'saved': saved})
+        return JsonResponse({'saved': saved, 'skipped': skipped})

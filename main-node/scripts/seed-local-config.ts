@@ -17,7 +17,8 @@ db.prepare(
 for (const [station, jobType] of [
   ['KITCHEN', 'KOT'],
   ['BAR', 'KOT'],
-  ['KITCHEN', 'BILL'],
+  ['DEFAULT', 'BILL'],
+  ['COUNTER', 'BILL'],
 ]) {
   db.prepare(
     `INSERT OR IGNORE INTO print_routes (station, job_type, printer_id, fallback_printer_id) VALUES (?, ?, ?, NULL)`,
