@@ -253,6 +253,31 @@ async function connectToNode(nodeId: string, nodeName: string, btn: HTMLButtonEl
   }
 }
 
+// ─── Wipe local data ──────────────────────────────────────────────────
+document.getElementById('wipe-local-data-btn')!.addEventListener('click', async () => {
+  const ok = confirm(
+    'Wipe ALL local data?\n\n' +
+    'This deletes orders, print jobs, menu cache, printers, sync logs, and cluster info ' +
+    'from this node\'s SQLite database.\n\n' +
+    'The cloud connection will be kept. You will NOT need to re-run the Setup Wizard.\n\n' +
+    'This cannot be undone.',
+  )
+  if (!ok) return
+  const btn = document.getElementById('wipe-local-data-btn') as HTMLButtonElement
+  btn.disabled = true
+  btn.textContent = 'Wiping…'
+  try {
+    const result = await api().wipeLocalData()
+    showToast(`Local data wiped — ${result.deleted} records deleted. Refresh to continue.`, 'success')
+    await refreshStatus()
+  } catch (err: any) {
+    showToast(`Wipe failed: ${err.message}`, 'error')
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Wipe Local Data'
+  }
+})
+
 // ─── Clear config / Logout ────────────────────────────────────────────
 document.getElementById('clear-config-btn')!.addEventListener('click', async () => {
   if (confirm('Are you sure you want to reset this node? All configurations will be lost.')) {
@@ -369,12 +394,36 @@ async function refreshStatus(): Promise<void> {
     cards.push(['Printer Offline (Demo)', s.demo_printer_offline])
 
     const cardsHtml = cards
-      .map(([label, val]) =>
-        `<div class="card"><h3>${label}</h3><p style="font-size:${String(val).length > 25 ? '13' : '20'}px">${val}</p></div>`
-      )
+      .map(([label, val]) => {
+        const fontSize = String(val).length > 25 ? '13' : '20'
+        const clearBtn = label === 'Pending Local Prints' && Number(val) > 0
+          ? `<button id="clear-stuck-jobs-btn" class="btn btn-secondary btn-sm"
+               style="margin-top:12px;font-size:12px;padding:6px 12px;background:#1e3a5f;border:1px solid #2d5a8e">
+               Clear Stuck Jobs
+             </button>`
+          : ''
+        return `<div class="card"><h3>${label}</h3><p style="font-size:${fontSize}px">${val}</p>${clearBtn}</div>`
+      })
       .join('')
 
     grid.innerHTML = leaderSectionHtml + cardsHtml
+
+    const clearJobsBtn = document.getElementById('clear-stuck-jobs-btn') as HTMLButtonElement | null
+    if (clearJobsBtn) {
+      clearJobsBtn.addEventListener('click', async () => {
+        clearJobsBtn.disabled = true
+        clearJobsBtn.textContent = 'Clearing…'
+        try {
+          const result = await api().clearStuckJobs()
+          showToast(`Cleared ${result.cleared} stuck print job(s).`, 'success')
+          await refreshStatus()
+        } catch (err: any) {
+          showToast(`Clear failed: ${err.message}`, 'error')
+          clearJobsBtn.disabled = false
+          clearJobsBtn.textContent = 'Clear Stuck Jobs'
+        }
+      })
+    }
   } catch (err) {
     showError(err instanceof Error ? err.message : String(err))
   }

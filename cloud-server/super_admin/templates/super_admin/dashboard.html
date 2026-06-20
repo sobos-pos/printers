@@ -59,6 +59,17 @@
                             <label class="form-label" for="branch_timezone">Timezone</label>
                             <input class="form-control" type="text" id="branch_timezone" name="timezone" value="Asia/Kolkata" placeholder="e.g. Asia/Kolkata">
                         </div>
+                        <div class="form-group">
+                            <label class="form-label">Geofence (clock-in zone) — optional</label>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <input class="form-control" type="number" step="any" name="latitude" placeholder="Latitude (e.g. 28.6139)">
+                                <input class="form-control" type="number" step="any" name="longitude" placeholder="Longitude (e.g. 77.2090)">
+                            </div>
+                            <input class="form-control" type="number" min="10" name="geofence_radius_m" value="200" placeholder="Radius (metres)" style="margin-top: 0.5rem;">
+                            <small style="color: var(--text-muted, #888); display: block; margin-top: 0.35rem;">
+                                Leave latitude &amp; longitude blank to let staff clock in from anywhere.
+                            </small>
+                        </div>
                         <button class="btn btn-primary" type="submit" style="width: 100%; margin-top: 0.5rem;">
                             Add Branch
                         </button>

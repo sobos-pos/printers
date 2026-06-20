@@ -174,7 +174,7 @@
           <h3>Manager Login</h3>
           <div class="form-group">
             <label>Email Address</label>
-            <input type="email" id="login-email" placeholder="manager@biryani.com" />
+            <input type="email" id="login-email" placeholder="manager.indira@copperpot.demo" />
           </div>
           <div class="form-group">
             <label>Password</label>
@@ -442,6 +442,16 @@
           If the primary Leader node crashes and Cloud is unreachable, click the button below to force promote this follower to Leader locally.
         </p>
         <button class="btn" id="become-active-btn">Force Promote Node</button>
+      </div>
+
+      <div class="card" style="border-color:#7f1d1d;background:#2d1515;margin-bottom:16px">
+        <h3 style="color:#f87171">Wipe Local Data</h3>
+        <p style="font-size:14px;color:#fca5a5;margin:8px 0 16px 0;line-height:1.5">
+          Deletes all local orders, print jobs, sync logs, menu cache, printers, and cluster data from this node's SQLite database.
+          The cloud connection is kept — no need to re-run the Setup Wizard.
+          Use this after a full cloud data wipe to start fresh.
+        </p>
+        <button class="btn btn-danger" id="wipe-local-data-btn">Wipe Local Data</button>
       </div>
 
       <div class="card" style="border-color:#7f1d1d;background:#2d1515">

@@ -26,6 +26,7 @@ export const ORDER_SOURCE = 'Waiter_App' as const
 // AsyncStorage / SecureStore keys.
 export const STORAGE_KEYS = {
   sessionToken: 'soboss.session_token', // SecureStore
+  staffToken: 'soboss.staff_token', // SecureStore — staff shift JWT for node auth
   authContext: 'soboss.auth_context', // AsyncStorage (JSON)
   nodeBaseUrl: 'soboss.node_base_url', // AsyncStorage — manually-entered URL
   cloudBaseUrl: 'soboss.cloud_base_url', // AsyncStorage

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid'
-import { getDb, nowIso } from '../db/connection'
+import { getDb, istTodayRange, nowIso } from '../db/connection'
 import type { PrintJobRow } from '../types'
 
 export const printJobRepository = {
@@ -90,13 +90,30 @@ export const printJobRepository = {
     return Boolean(row)
   },
 
+  // Mark old PENDING/RETRYING jobs as FAILED so they stop counting as "pending"
+  // after the printer has been unreachable for too long. Called on worker startup
+  // and hourly thereafter.
+  expireStaleJobs(olderThanHours = 4): number {
+    const cutoff = new Date(Date.now() - olderThanHours * 3_600_000).toISOString()
+    const result = getDb()
+      .prepare(
+        `UPDATE print_jobs
+         SET status = 'FAILED', last_error = 'Auto-expired: printer unreachable for too long', updated_at = ?
+         WHERE status IN ('PENDING', 'RETRYING') AND created_at < ?`,
+      )
+      .run(nowIso(), cutoff) as { changes: number }
+    return result.changes
+  },
+
   // KOTs this node actually printed today (markPrinted stamps updated_at). Works
   // for both roles — the leader's local prints and a follower's forwarded prints.
   countPrintedToday(): number {
-    const today = new Date().toISOString().slice(0, 10)
+    const { start, end } = istTodayRange()
     const row = getDb()
-      .prepare(`SELECT COUNT(*) as c FROM print_jobs WHERE status = 'PRINTED' AND updated_at LIKE ?`)
-      .get(`${today}%`) as { c: number }
+      .prepare(
+        `SELECT COUNT(*) as c FROM print_jobs WHERE status = 'PRINTED' AND updated_at >= ? AND updated_at <= ?`,
+      )
+      .get(start, end) as { c: number }
     return row.c
   },
 }

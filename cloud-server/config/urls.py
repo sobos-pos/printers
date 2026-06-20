@@ -10,6 +10,10 @@ from core.views import (
     AuthLogoutView,
     AuthReconnectNodeView,
     AuthStaffTokenView,
+    AttendanceStatusView,
+    AttendanceClockInView,
+    AttendanceClockOutView,
+    AttendanceHistoryView,
 )
 
 urlpatterns = [
@@ -20,6 +24,10 @@ urlpatterns = [
     path('api/v1/auth/logout/', AuthLogoutView.as_view()),
     path('api/v1/auth/staff-token/', AuthStaffTokenView.as_view()),
     path('api/v1/auth/reconnect-node/', AuthReconnectNodeView.as_view()),
+    path('api/v1/attendance/status/', AttendanceStatusView.as_view()),
+    path('api/v1/attendance/clock-in/', AttendanceClockInView.as_view()),
+    path('api/v1/attendance/clock-out/', AttendanceClockOutView.as_view()),
+    path('api/v1/attendance/history/', AttendanceHistoryView.as_view()),
     path('api/v1/', include('tables.urls')),
     path('api/v1/', include('orders.urls')),
     path('api/v1/sync/', include('core.urls')),

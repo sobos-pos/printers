@@ -26,6 +26,25 @@ export async function clearToken(): Promise<void> {
   }
 }
 
+// ---- Staff shift JWT (for node offline auth) ----
+export async function saveStaffToken(token: string): Promise<void> {
+  await SecureStore.setItemAsync(STORAGE_KEYS.staffToken, token)
+}
+export async function getStaffToken(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(STORAGE_KEYS.staffToken)
+  } catch {
+    return null
+  }
+}
+export async function clearStaffToken(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(STORAGE_KEYS.staffToken)
+  } catch {
+    /* noop */
+  }
+}
+
 // ---- Generic JSON helpers ----
 async function getJson<T>(key: string): Promise<T | null> {
   try {

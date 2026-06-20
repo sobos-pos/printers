@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid'
-import { getDb, nowIso } from '../db/connection'
+import { getDb, istTodayRange, nowIso } from '../db/connection'
 import type {
   BulkOrderItem,
   LocalOrder,
@@ -120,10 +120,10 @@ export const orderRepository = {
   },
 
   countToday(): number {
-    const today = new Date().toISOString().slice(0, 10)
+    const { start, end } = istTodayRange()
     const row = getDb()
-      .prepare(`SELECT COUNT(*) as c FROM orders WHERE created_at LIKE ?`)
-      .get(`${today}%`) as { c: number }
+      .prepare(`SELECT COUNT(*) as c FROM orders WHERE created_at >= ? AND created_at <= ?`)
+      .get(start, end) as { c: number }
     return row.c
   },
 

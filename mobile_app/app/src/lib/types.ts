@@ -21,6 +21,11 @@ export type OrderSource =
 export interface LocationCtx {
   id: string
   name: string
+  // Geofence centre + radius for clock-in. latitude/longitude are null when the
+  // location has no geofence configured (staff may clock in from anywhere).
+  latitude?: number | null
+  longitude?: number | null
+  geofence_radius_m?: number
 }
 
 export interface RestaurantCtx {
@@ -32,6 +37,9 @@ export interface RestaurantCtx {
 export interface UserCtx {
   name: string
   role: Role
+  username?: string
+  email?: string
+  location?: LocationCtx | null
 }
 
 export interface AuthContext {
@@ -41,6 +49,40 @@ export interface AuthContext {
 
 export interface LoginResponse extends AuthContext {
   session_token: string
+  // Staff shift JWT signed by the restaurant's HS256 secret. Absent for superusers
+  // (no restaurant). Used by the node for offline auth; must NOT be sent to the cloud.
+  access_token?: string
+  expires_at?: string
+  expires_in?: number
+}
+
+// ---- Attendance ----
+
+export interface AttendanceStatus {
+  clocked_in: boolean
+  shift_id: string | null
+  clock_in_at: string | null
+}
+
+/** A single day's worked total, used by the profile heatmap. */
+export interface AttendanceDay {
+  date: string // YYYY-MM-DD (location-local)
+  minutes: number
+  shifts: number
+}
+
+export interface AttendanceHistory {
+  from: string
+  to: string
+  days: AttendanceDay[]
+  total_minutes: number
+  total_days: number
+}
+
+/** Device coordinates sent with clock in/out. */
+export interface Coords {
+  latitude: number
+  longitude: number
 }
 
 export interface TableSummary {
