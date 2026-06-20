@@ -448,8 +448,11 @@ class Variant(BaseModel):
     )
     name = models.CharField(max_length=40)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    # PROTECT, not SET_NULL: silently nulling tax_group would zero-tax the
+    # variant on every future bill. Force the tax group to be reassigned/retired
+    # explicitly before it can be deleted.
     tax_group = models.ForeignKey(
-        TaxGroup, null=True, blank=True, on_delete=models.SET_NULL, related_name='variants'
+        TaxGroup, null=True, blank=True, on_delete=models.PROTECT, related_name='variants'
     )
     portion_value = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     portion_unit = models.ForeignKey(
@@ -659,6 +662,12 @@ class SectionMenu(BaseModel):
                 'Add MenuListing rows before assigning it to a section.'
             )
 
+    def save(self, *args, **kwargs):
+        # clean() only runs via admin/forms; enforce it on every write (seed,
+        # shell, API) so an empty menu can never be assigned to a section.
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f'{self.section.code} → {self.menu.name}'
 
@@ -666,9 +675,15 @@ class SectionMenu(BaseModel):
 class MenuListing(BaseModel):
     """Item membership in a Menu with an optional price override.
 
-    If price_override is null the item's cheapest variant price is shown as-is.
-    If set, it replaces the displayed price for that menu (single-price items
-    such as bar beverages that differ in cost between sections).
+    Price resolution (most specific wins):
+        MenuListingVariantPrice.price   (per-variant, this menu)   — any item
+        price_override                  (flat, single-variant only)
+        Variant.price                   (catalogue default)
+
+    ``price_override`` is the convenience flat price for single-variant items
+    (e.g. a bar soda). Multi-variant items (Small/Medium/Large) are priced
+    per-variant via :class:`MenuListingVariantPrice` instead, so the same dish
+    can carry different per-size prices in two sections.
     """
 
     menu = models.ForeignKey(Menu, on_delete=models.CASCADE, related_name='listings')
@@ -682,6 +697,63 @@ class MenuListing(BaseModel):
             models.UniqueConstraint(fields=['menu', 'item'], name='uniq_menu_listing'),
         ]
 
+    def clean(self):
+        # The flat price_override has no defined target on a multi-variant item
+        # (which variant?) and a variant order would ignore it. Per-variant
+        # pricing must go through MenuListingVariantPrice instead.
+        if self.price_override is not None and self.item_id and self.item.variants.count() > 1:
+            raise ValidationError(
+                f'price_override is only for single-variant items; '
+                f'"{self.item.name}" has multiple variants — add MenuListingVariantPrice '
+                f'rows for per-variant section pricing instead.'
+            )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         override = f' @ ₹{self.price_override}' if self.price_override is not None else ''
         return f'{self.item.name} in {self.menu.name}{override}'
+
+
+class MenuListingVariantPrice(BaseModel):
+    """Per-variant price for an item within a specific menu.
+
+    Lets a multi-variant dish carry different per-size prices per section
+    (e.g. Whisky 30ml/60ml priced differently in Janatha vs Premium bar)
+    without duplicating the catalogue MenuItem. Overrides Variant.price for
+    this menu only; falls through to Variant.price when absent.
+    """
+
+    menu_listing = models.ForeignKey(
+        MenuListing, on_delete=models.CASCADE, related_name='variant_prices'
+    )
+    variant = models.ForeignKey(
+        'Variant', on_delete=models.CASCADE, related_name='listing_prices'
+    )
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['menu_listing', 'variant'], name='uniq_listing_variant_price'
+            ),
+        ]
+
+    def clean(self):
+        # The variant must belong to the same item this listing is for —
+        # otherwise the price would apply to an unrelated dish.
+        if self.variant_id and self.menu_listing_id and (
+            self.variant.menu_item_id != self.menu_listing.item_id
+        ):
+            raise ValidationError(
+                'variant does not belong to this listing’s item.'
+            )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'{self.variant} @ ₹{self.price} in {self.menu_listing.menu.name}'

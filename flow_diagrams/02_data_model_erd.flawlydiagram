@@ -1,0 +1,164 @@
+entity-relationship-diagram
+
+// ============================================================
+// How Tables & Menu connect to Section (BILL) and Kitchen (KOT).
+// Connector ">" = many-to-one (FK side -> PK side).
+// Three axes, all scoped to Location (a branch):
+//   VISIBILITY : Section -> SectionMenu -> Menu -> MenuListing -> MenuItem
+//   PREPARATION: MenuItem.kitchen ?? MenuCategory.kitchen -> Kitchen   (KOT)
+//   BILLING    : Order -> Table -> Section                            (BILL)
+// PrintRoute.station_code holds EITHER a Kitchen code (KOT)
+//   OR a Section code (BILL).
+// ============================================================
+
+meta {
+  title: "Tables / Menu -> Section & Kitchen -> Print Routing";
+  direction: right;
+  fontFamily: "Inter";
+  fontSize: 14;
+}
+
+Restaurant [icon: building] {
+  id uuid pk
+  name string
+}
+
+Location [icon: building, color: slate] {
+  id uuid pk
+  restaurant_id uuid fk
+  name string
+}
+
+Section [icon: home, color: green] {
+  id uuid pk
+  location_id uuid fk
+  name string
+  code string
+  display_order int
+  is_active boolean
+}
+
+Table [icon: clipboard, color: blue] {
+  id uuid pk
+  location_id uuid fk
+  section_id uuid fk
+  label string
+  is_active boolean
+}
+
+Kitchen [icon: cog, color: orange] {
+  id uuid pk
+  location_id uuid fk
+  name string
+  code string
+  is_active boolean
+}
+
+MenuCategory [icon: list-alt] {
+  id uuid pk
+  location_id uuid fk
+  kitchen_id uuid fk
+  name string
+}
+
+MenuItem [icon: file-text, color: blue] {
+  id uuid pk
+  category_id uuid fk
+  kitchen_id uuid fk
+  station_id uuid fk
+  name string
+  is_available boolean
+}
+
+Variant [icon: dollar-sign] {
+  id uuid pk
+  menu_item_id uuid fk
+  name string
+  price decimal
+}
+
+Menu [icon: list-alt] {
+  id uuid pk
+  location_id uuid fk
+  name string
+}
+
+SectionMenu {
+  id uuid pk
+  section_id uuid fk
+  menu_id uuid fk
+}
+
+MenuListing {
+  id uuid pk
+  menu_id uuid fk
+  item_id uuid fk
+  price_override decimal
+}
+
+Order [icon: clipboard] {
+  id uuid pk
+  location_id uuid fk
+  table_id uuid fk
+  status string
+  total decimal
+}
+
+OrderItem [icon: file-text] {
+  id uuid pk
+  order_id uuid fk
+  menu_item_id uuid fk
+  variant_id uuid fk
+  quantity int
+  unit_price decimal
+}
+
+PrintRoute [icon: send, color: violet] {
+  id uuid pk
+  location_id uuid fk
+  station_code string
+  print_type string
+  assigned_node_id uuid fk
+}
+
+LocationNode [icon: cog, color: slate] {
+  id uuid pk
+  location_id uuid fk
+  node_id string
+  cluster_role string
+}
+
+// --- branch scoping ---
+Location.restaurant_id > Restaurant.id
+Section.location_id > Location.id
+Kitchen.location_id > Location.id
+Menu.location_id > Location.id
+MenuCategory.location_id > Location.id
+Order.location_id > Location.id
+PrintRoute.location_id > Location.id
+LocationNode.location_id > Location.id
+
+// --- BILLING axis (table -> section) ---
+Table.location_id > Location.id
+Table.section_id > Section.id
+
+// --- PREPARATION axis (dish -> kitchen) ---
+MenuCategory.kitchen_id > Kitchen.id
+MenuItem.category_id > MenuCategory.id
+MenuItem.kitchen_id > Kitchen.id
+Variant.menu_item_id > MenuItem.id
+
+// --- VISIBILITY axis (section -> menu -> item) ---
+SectionMenu.section_id > Section.id
+SectionMenu.menu_id > Menu.id
+MenuListing.menu_id > Menu.id
+MenuListing.item_id > MenuItem.id
+
+// --- order -> bill ---
+Order.table_id > Table.id
+OrderItem.order_id > Order.id
+OrderItem.menu_item_id > MenuItem.id
+OrderItem.variant_id > Variant.id
+
+// --- routing target ---
+PrintRoute.assigned_node_id > LocationNode.id

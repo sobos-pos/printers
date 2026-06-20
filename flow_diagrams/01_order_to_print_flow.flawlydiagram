@@ -1,0 +1,58 @@
+flowchart-diagram
+
+// ============================================================
+// How ordering an item for a table turns into printed tickets.
+// Two INDEPENDENT axes decide routing:
+//   KOT axis  = WHERE a dish is cooked  (driven by the dish)
+//   BILL axis = WHO gets the bill       (driven by the table)
+// Verified against cloud-server + main-node (current code).
+// ============================================================
+
+meta {
+  title: "Ordering an Item -> KOT & BILL Print Flow";
+  direction: down;
+  fontFamily: "Inter";
+  fontSize: 14;
+  fontWeight: 600;
+}
+
+PlaceOrder [label: "Waiter places order for a Table (N items)", shape: oval, icon: clipboard, color: blue]
+
+KOT [label: "KOT axis - WHERE is it cooked? (per dish)", color: orange] {
+  EachItem [label: "For each order item", icon: file-text]
+  ResolveKitchen [label: "item.kitchen ?? category.kitchen ?? 'KITCHEN'", shape: diamond, icon: cog]
+  GroupKitchen [label: "Group items by kitchen code -> N segments", icon: list-alt]
+}
+
+BILL [label: "BILL axis - WHO gets the bill? (per table)", color: green] {
+  OrderTable [label: "order.table", icon: home]
+  ResolveSection [label: "table.section.code ?? 'COUNTER'", shape: diamond, icon: cog]
+  OneBill [label: "ONE consolidated bill for the whole order", icon: dollar-sign]
+}
+
+EnqueueKOT [label: "Enqueue 1 KOT job per kitchen segment", icon: file-text, color: orange]
+EnqueueBILL [label: "Enqueue 1 BILL job keyed by section code", icon: dollar-sign, color: green]
+
+Routing [label: "PrintRoute lookup: (location, code, print_type)", shape: hexagon, icon: cog, color: violet]
+
+LeaderCheck [label: "Is this code assigned to another node?", shape: diamond, icon: cog]
+Forward [label: "Leader forwards job to assigned follower node (HTTP)", icon: send, color: violet]
+LocalPrint [label: "Print on this node's mapped printer", icon: printer]
+Physical [label: "Physical thermal printer (ESC/POS)", shape: document, icon: printer, color: slate]
+
+// --- KOT axis ---
+PlaceOrder > EachItem
+EachItem > ResolveKitchen > GroupKitchen > EnqueueKOT
+
+// --- BILL axis ---
+PlaceOrder > OrderTable
+OrderTable > ResolveSection > OneBill > EnqueueBILL
+
+// --- shared routing + delivery ---
+EnqueueKOT > Routing
+EnqueueBILL > Routing
+Routing > LeaderCheck
+LeaderCheck > Forward: "yes & online"
+LeaderCheck > LocalPrint: "no / node offline"
+Forward > Physical
+LocalPrint > Physical

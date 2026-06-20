@@ -1,0 +1,62 @@
+sequence-diagram
+
+// ============================================================
+// Runtime timeline: one order at a table -> KOTs + 1 BILL,
+// printed locally or forwarded to a follower node, then
+// synced to the cloud. Verified against main-node services.
+// ============================================================
+
+meta {
+  title: "Order -> Print Runtime (Leader / Follower / Cloud)";
+  autoNumber: on;
+  fontFamily: "Inter";
+  fontSize: 14;
+}
+
+Waiter [icon: user, color: blue]
+Leader [icon: server, color: violet]
+KitchenPrinter [icon: printer, color: orange]
+Follower [icon: server, color: violet]
+BarPrinter [icon: printer, color: orange]
+BillPrinter [icon: printer, color: green]
+Cloud [icon: cloud, color: slate]
+
+Waiter > Leader: "POST order (Table T, items)"
+activate Leader
+Leader > Leader: "resolveSectionCode(table) -> 'GROUND' or 'COUNTER'"
+Leader > Leader: "buildKot() -> group items by kitchen code"
+
+loop [label: "for each kitchen segment"] {
+  Leader > Leader: "enqueueSegments() -> 1 KOT job (station = kitchen code)"
+}
+Leader > Leader: "enqueueBill() -> 1 BILL job (station = section code)"
+Leader --> Waiter: "201 order accepted"
+deactivate Leader
+
+Leader > Leader: "processDueJobs() picks up pending jobs"
+activate Leader
+
+loop [label: "for each due print job"] {
+  alt [label: "code assigned to THIS node (e.g. MAIN -> KOT)"] {
+    Leader > KitchenPrinter: "print KOT (ESC/POS)"
+    KitchenPrinter --> Leader: "printed"
+  }
+  else [label: "code assigned to a FOLLOWER & online (e.g. BAR -> KOT)"] {
+    Leader > Follower: "forwardPrintJob() over HTTP"
+    activate Follower
+    Follower > BarPrinter: "print KOT locally"
+    BarPrinter --> Follower: "printed"
+    Follower --> Leader: "QUEUED / done"
+    deactivate Follower
+  }
+  else [label: "assigned node offline -> fallback"] {
+    Leader > Leader: "fall back to local print (no job dropped)"
+  }
+}
+
+Leader > BillPrinter: "print ONE consolidated BILL (section route)"
+BillPrinter --> Leader: "printed"
+deactivate Leader
+
+Leader > Cloud: "sync order + status (SyncOutbox / status push)"
+Cloud --> Leader: "ack"

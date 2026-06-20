@@ -56,6 +56,16 @@ class Order(BaseModel):
         indexes = [
             models.Index(fields=['location', 'status']),
         ]
+        constraints = [
+            # Idempotency must actually be enforced, not just indexed. Scoped per
+            # location; the partial condition lets the many blank-key orders
+            # (POS/QR that don't send one) coexist while real keys stay unique.
+            models.UniqueConstraint(
+                fields=['location', 'idempotency_key'],
+                condition=~models.Q(idempotency_key=''),
+                name='uniq_order_idempotency_key',
+            ),
+        ]
 
     def __str__(self):
         return f'Order {self.id} [{self.status}] @ {self.location}'

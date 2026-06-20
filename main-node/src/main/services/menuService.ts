@@ -45,17 +45,31 @@ export const menuService = {
   },
 
   /** Filter categories to a section's visible items + apply price overrides,
-   *  dropping categories left with no items. */
+   *  dropping categories left with no items. Mirrors the cloud's
+   *  get_menu_for_table: per-variant override → flat item override →
+   *  variant.price, with base_price = item override ?? cheapest effective variant. */
   applySectionFilter(categories: CachedCategory[], section: CachedSection): CachedCategory[] {
     const visible = new Set(section.visible_item_ids)
-    const overrides = section.price_overrides ?? {}
+    const itemOverrides = section.price_overrides ?? {}
+    const variantOverrides = section.variant_price_overrides ?? {}
     const result: CachedCategory[] = []
     for (const cat of categories) {
       const items = (cat.items ?? [])
         .filter((i) => visible.has(i.id))
-        .map((i) =>
-          overrides[i.id] !== undefined ? { ...i, base_price: overrides[i.id] } : i,
-        )
+        .map((i) => {
+          // Apply per-variant section prices to each variant.
+          const variants = (i.variants ?? []).map((v) =>
+            variantOverrides[v.id] !== undefined ? { ...v, price: variantOverrides[v.id] } : v,
+          )
+          // base_price: flat item override wins; else cheapest effective variant.
+          let base_price = i.base_price
+          if (itemOverrides[i.id] !== undefined) {
+            base_price = itemOverrides[i.id]
+          } else if (variants.length > 0) {
+            base_price = String(Math.min(...variants.map((v) => parseFloat(v.price))))
+          }
+          return { ...i, base_price, variants }
+        })
       if (items.length > 0) result.push({ ...cat, items })
     }
     return result
@@ -65,15 +79,29 @@ export const menuService = {
     return (payload.sections ?? []).find((s) => s.code === sectionCode) ?? null
   },
 
-  /** Section price override for an item, or null. Used by order pricing so a
-   *  locally-created bill charges the section price (e.g. bar markup). */
+  /** Flat section override for an item (single-variant items), or null. Used by
+   *  order pricing for a no-variant line so a local bill charges the section
+   *  price (e.g. bar markup). */
   getPriceOverride(sectionCode: string | null, menuItemId: string): number | null {
+    return this._lookupOverride(sectionCode, (s) => s.price_overrides?.[menuItemId])
+  },
+
+  /** Per-variant section price (multi-variant items), or null. Used by order
+   *  pricing when a specific variant is selected. */
+  getVariantPriceOverride(sectionCode: string | null, variantId: string): number | null {
+    return this._lookupOverride(sectionCode, (s) => s.variant_price_overrides?.[variantId])
+  },
+
+  _lookupOverride(
+    sectionCode: string | null,
+    pick: (s: CachedSection) => string | undefined,
+  ): number | null {
     if (!sectionCode) return null
     const cached = menuCacheRepository.get(config.locationId)
     if (!cached) return null
     const section = this.findSection(cached.payload, sectionCode)
     if (!section || !section.filtered) return null
-    const raw = section.price_overrides?.[menuItemId]
+    const raw = pick(section)
     if (raw === undefined) return null
     const value = parseFloat(raw)
     return Number.isFinite(value) ? value : null

@@ -67,15 +67,17 @@ function buildLineItems(items: BulkOrderItem[], sectionCode: string | null = nul
     const found = menuService.findMenuItem(itemData.menu_item)
     if (!found) throw new Error(`Menu item not found: ${itemData.menu_item}`)
 
-    // Section price override (e.g. bar markup) replaces the catalogue base price.
-    // A selected variant still wins, mirroring the cloud's get_menu_for_table.
-    const override = menuService.getPriceOverride(sectionCode, itemData.menu_item)
-    let unitPrice = override ?? parseFloat(found.item.base_price)
+    // Section pricing (e.g. bar markup), mirroring the cloud's get_menu_for_table:
+    //   variant selected → per-variant section price ?? variant.price
+    //   no variant       → flat item override ?? catalogue base_price
+    const itemOverride = menuService.getPriceOverride(sectionCode, itemData.menu_item)
+    let unitPrice = itemOverride ?? parseFloat(found.item.base_price)
     let variantName: string | null = null
     if (itemData.variant) {
       const variant = found.item.variants?.find((v) => v.id === itemData.variant)
       if (variant) {
-        unitPrice = parseFloat(variant.price)
+        const variantOverride = menuService.getVariantPriceOverride(sectionCode, itemData.variant)
+        unitPrice = variantOverride ?? parseFloat(variant.price)
         variantName = variant.name
       }
     }

@@ -179,7 +179,10 @@ export interface MenuCachePayload {
     name: string
     filtered: boolean
     visible_item_ids: string[]
+    /** Flat per-item base-price override (single-variant items). */
     price_overrides: Record<string, string>
+    /** Per-variant price override (multi-variant items), keyed by variant id. */
+    variant_price_overrides?: Record<string, string>
   }>
 }
 
