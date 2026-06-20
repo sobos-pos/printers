@@ -175,14 +175,20 @@ export async function isWindowsPrinterAvailable(printerName: string): Promise<bo
     `if ($null -eq $p) { Write-Output 'false'; exit }`,
     `if ($p.WorkOffline -eq $true) { Write-Output 'false'; exit }`,
     `if ($p.PrinterStatus -eq 7) { Write-Output 'false'; exit }`, // 7 = Offline
-    // USB: confirm the physical device is still enumerated by PnP.
-    // Windows appends suffixes like " (2)", " (3)" and " [USB001]" to spooler names
-    // when the same printer model is installed multiple times, but the PnP FriendlyName
-    // stays as the bare model name. Strip those suffixes before comparing.
+    // USB: confirm the physical device is still connected.
+    //
+    // Thermal/receipt printers do NOT register under PnP -Class Printer.
+    // Instead, Windows creates a SoftwareDevice with InstanceId like:
+    //   USBPRINT\HAOYIN_CX58D\6&20489CF1&0&USB004
+    // This PnP device only exists when the USB cable is physically plugged in.
+    // The InstanceId conveniently ends with the spooler port name (e.g. USB004),
+    // so we match on that to tie the physical device to this specific printer.
+    //
+    // PrintQueue PnP devices (SWD\PRINTENUM\...) are software objects that
+    // persist with Status OK even after unplugging — never use those.
     `if ($p.PortName -match '^USB\\d+$') {`,
-    `  $baseName = (($p.Name -replace '\\s*\\(\\d+\\)\\s*$', '') -replace '\\s*\\[\\w+\\]\\s*$', '').Trim()`,
-    `  $pnp = Get-PnpDevice -Class PrintQueue -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq $baseName -or $p.Name -like "$($_.FriendlyName)*" }`,
-    `  if (-not ($pnp)) { Write-Output 'false'; exit }`,
+    `  $usbDev = Get-PnpDevice -PresentOnly -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like "USBPRINT\\*$($p.PortName)" }`,
+    `  if (-not ($usbDev)) { Write-Output 'false'; exit }`,
     `}`,
     // COM/Bluetooth: confirm the virtual serial port is still present
     `if ($p.PortName -match '^COM\\d+$') {`,
