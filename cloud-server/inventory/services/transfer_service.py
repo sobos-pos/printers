@@ -245,7 +245,15 @@ def receive_transfer(transfer_id, *, received_quantities=None, received_by=None)
 
 
 def cancel_transfer(transfer_id):
-    """Cancel a transfer. Only allowed if REQUESTED."""
+    """Cancel a transfer.
+
+    Allowed from REQUESTED or APPROVED (state machine).
+
+    FIX(audit-3): If the transfer was APPROVED, stock was already deducted
+    from the sender on approval. Cancelling MUST restore that stock — the
+    previous implementation just flipped the status and silently lost the
+    sender's stock.
+    """
     with transaction.atomic():
         transfer = (
             StockTransfer.objects
@@ -253,6 +261,22 @@ def cancel_transfer(transfer_id):
             .get(id=transfer_id)
         )
         _validate_transition(transfer.status, TransferStatus.CANCELLED)
+        was_approved = transfer.status == TransferStatus.APPROVED
+
+        if was_approved:
+            for item in transfer.items.select_related('ingredient'):
+                if item.approved_quantity is None or item.approved_quantity <= Decimal('0'):
+                    continue
+                stock_service.replenish_stock(
+                    ingredient_id=item.ingredient_id,
+                    location_id=transfer.from_location_id,
+                    quantity=item.approved_quantity,
+                    unit_cost=Decimal('0'),  # cost preserved via weighted-avg
+                    movement_type=MovementType.TRANSFER_IN,  # treat as reversal
+                    reference_type='transfer_cancel',
+                    reference_id=transfer.id,
+                    notes='Cancellation of approved transfer — sender stock restored.',
+                )
 
         transfer.status = TransferStatus.CANCELLED
         transfer.save(update_fields=['status', 'updated_at'])

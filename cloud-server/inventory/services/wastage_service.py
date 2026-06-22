@@ -75,7 +75,11 @@ def log_wastage(
             logged_by=logged_by,
         )
 
-        # Deduct from stock
+        # Deduct from stock.
+        # FIX(audit-2): When a batch is specified above we already decremented
+        # that batch's remaining_quantity. Pass skip_batch_fifo=True so
+        # deduct_stock doesn't ALSO decrement a different (oldest) batch —
+        # that was a silent double-deduction bug.
         stock_service.deduct_stock(
             ingredient_id=ingredient_id,
             location_id=location_id,
@@ -84,6 +88,7 @@ def log_wastage(
             reference_type='wastage',
             reference_id=wastage.id,
             performed_by=logged_by,
+            skip_batch_fifo=(batch is not None),
         )
 
     return wastage

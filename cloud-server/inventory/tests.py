@@ -861,3 +861,472 @@ class AuditTrailTests(InventoryTestBase):
         # Verify chain: each after = next before
         self.assertEqual(movements[0].quantity_after, movements[1].quantity_before)
         self.assertEqual(movements[1].quantity_after, movements[2].quantity_before)
+
+
+# ===========================================================================
+# Production readiness — added by audit (see AUDIT.md)
+# ===========================================================================
+
+import unittest
+from django.db.models import F as _F
+
+
+class ProductionReadinessTests(InventoryTestBase):
+    """Tests that exercise the gaps surfaced by the production readiness
+    audit. Tests marked ``expectedFailure`` document known unfixed issues;
+    they FAIL passing for now (i.e. they DO raise / DO assert), but if the
+    underlying code is changed in a way that masks the bug, Django flags it.
+    """
+
+    # ----- audit-1: tenant boundary ----------------------------------------
+
+    def test_tenant_boundary_ingredient_unit_cross_restaurant(self):
+        """Ingredient must reject a unit from another restaurant."""
+        other = Restaurant.objects.create(name='Other Restaurant')
+        other_unit = InventoryUnit.objects.create(
+            name='Other-kg', short_name='kgx', restaurant=other,
+        )
+        with self.assertRaises(ValidationError):
+            ing = Ingredient(
+                name='Cross-tenant Onion',
+                unit=other_unit,
+                restaurant=self.restaurant,
+            )
+            ing.full_clean()
+
+    def test_tenant_boundary_ingredient_category_cross_restaurant(self):
+        """Ingredient must reject a category from another restaurant."""
+        other = Restaurant.objects.create(name='Other-2 Restaurant')
+        other_cat = IngredientCategory.objects.create(
+            name='Other-Produce', restaurant=other,
+        )
+        with self.assertRaises(ValidationError):
+            ing = Ingredient(
+                name='Cross-tenant Tomato',
+                unit=self.unit_kg,
+                category=other_cat,
+                restaurant=self.restaurant,
+            )
+            ing.full_clean()
+
+    def test_tenant_boundary_transfer_cross_restaurant(self):
+        """StockTransfer must reject from/to locations from different restaurants."""
+        other = Restaurant.objects.create(name='Other-3 Restaurant')
+        other_location = Location.objects.create(
+            restaurant=other, name='Other Branch',
+        )
+        with self.assertRaises(ValidationError):
+            t = StockTransfer(
+                transfer_number='TRF-XR-1',
+                from_location=self.location,
+                to_location=other_location,
+            )
+            t.full_clean()
+
+    def test_tenant_boundary_stocklevel_cross_restaurant(self):
+        from inventory.models import StockLevel
+        other = Restaurant.objects.create(name='Other-4 Restaurant')
+        other_location = Location.objects.create(
+            restaurant=other, name='Other-4 Branch',
+        )
+        with self.assertRaises(ValidationError):
+            sl = StockLevel(
+                ingredient=self.onion,   # belongs to self.restaurant
+                location=other_location, # belongs to other
+                quantity=Decimal('1'),
+            )
+            sl.full_clean()
+
+    # ----- audit-2: wastage with batch_id must not double-deduct -----------
+
+    def test_wastage_with_batch_id_does_not_double_deduct(self):
+        """Regression: log_wastage(batch_id=X) was decrementing both X AND
+        the oldest FIFO batch. After the fix, only batch X moves."""
+        stock_service.record_opening_stock(
+            ingredient_id=self.onion.id,
+            location_id=self.location.id,
+            quantity=Decimal('30'),
+            unit_cost=Decimal('40'),
+        )
+        old_batch = Batch.objects.create(
+            ingredient=self.onion, location=self.location,
+            batch_number='AUDIT-OLD',
+            received_quantity=Decimal('10'),
+            remaining_quantity=Decimal('10'),
+            unit_cost=Decimal('40'),
+        )
+        new_batch = Batch.objects.create(
+            ingredient=self.onion, location=self.location,
+            batch_number='AUDIT-NEW',
+            received_quantity=Decimal('20'),
+            remaining_quantity=Decimal('20'),
+            unit_cost=Decimal('40'),
+        )
+
+        # Waste 5 units explicitly attributed to NEW batch.
+        wastage_service.log_wastage(
+            ingredient_id=self.onion.id,
+            location_id=self.location.id,
+            quantity=Decimal('5'),
+            reason=WastageReason.SPOILED,
+            batch_id=new_batch.id,
+        )
+
+        old_batch.refresh_from_db()
+        new_batch.refresh_from_db()
+        # OLD batch must be untouched — pre-fix this was 5 (double-decrement).
+        self.assertEqual(old_batch.remaining_quantity, Decimal('10'))
+        # NEW batch is the only one that loses the 5 units.
+        self.assertEqual(new_batch.remaining_quantity, Decimal('15'))
+
+    # ----- audit-3: cancel-approved-transfer restores sender stock ---------
+
+    def test_cancel_approved_transfer_restores_sender_stock(self):
+        stock_service.record_opening_stock(
+            ingredient_id=self.onion.id,
+            location_id=self.location.id,
+            quantity=Decimal('50'),
+            unit_cost=Decimal('40'),
+        )
+        stock_service.record_opening_stock(
+            ingredient_id=self.onion.id,
+            location_id=self.location2.id,
+            quantity=Decimal('10'),
+            unit_cost=Decimal('40'),
+        )
+
+        t = transfer_service.create_transfer(
+            from_location_id=self.location.id,
+            to_location_id=self.location2.id,
+            items_data=[{'ingredient_id': self.onion.id, 'requested_quantity': Decimal('20')}],
+        )
+        transfer_service.approve_transfer(t.id)
+
+        sender = StockLevel.objects.get(ingredient=self.onion, location=self.location)
+        self.assertEqual(sender.quantity, Decimal('30'))  # 50 − 20
+
+        # Cancel the APPROVED transfer — sender's 20 must come back.
+        transfer_service.cancel_transfer(t.id)
+
+        sender.refresh_from_db()
+        self.assertEqual(sender.quantity, Decimal('50'))
+
+    # ----- audit-4: FIFO drift detection -----------------------------------
+
+    def test_fifo_drift_when_batches_less_than_stock(self):
+        """Opening stock is 50 but only 10 is tracked in batches. Deducting
+        15 should NOT crash, should decrement StockLevel correctly, and
+        should log a warning (we can't assert log easily — just behaviour)."""
+        stock_service.record_opening_stock(
+            ingredient_id=self.onion.id,
+            location_id=self.location.id,
+            quantity=Decimal('50'),
+            unit_cost=Decimal('40'),
+        )
+        b = Batch.objects.create(
+            ingredient=self.onion, location=self.location,
+            batch_number='AUDIT-DRIFT',
+            received_quantity=Decimal('10'),
+            remaining_quantity=Decimal('10'),
+            unit_cost=Decimal('40'),
+        )
+        stock_service.deduct_stock(
+            ingredient_id=self.onion.id,
+            location_id=self.location.id,
+            quantity=Decimal('15'),
+            movement_type=MovementType.ORDER_DEDUCTION,
+        )
+        sl = StockLevel.objects.get(ingredient=self.onion, location=self.location)
+        b.refresh_from_db()
+        # StockLevel decrements correctly...
+        self.assertEqual(sl.quantity, Decimal('35'))
+        # ...but batch goes to zero (5 untracked).
+        self.assertEqual(b.remaining_quantity, Decimal('0'))
+        self.assertEqual(b.status, BatchStatus.CONSUMED)
+
+    # ----- audit-18: FEFO ordering -----------------------------------------
+
+    def test_fefo_consumes_earlier_expiry_first(self):
+        """A newer batch (later created_at) with EARLIER expiry should be
+        consumed BEFORE an older batch with later expiry."""
+        from datetime import date as _date, timedelta as _td
+        stock_service.record_opening_stock(
+            ingredient_id=self.paneer.id,
+            location_id=self.location.id,
+            quantity=Decimal('0'),
+            unit_cost=Decimal('300'),
+        )
+        # Created first, expires later.
+        late_expiry = Batch.objects.create(
+            ingredient=self.paneer, location=self.location,
+            batch_number='LATE-EXP',
+            received_quantity=Decimal('5'),
+            remaining_quantity=Decimal('5'),
+            unit_cost=Decimal('300'),
+            expiry_date=_date.today() + _td(days=30),
+        )
+        # Created second, expires SOONER.
+        early_expiry = Batch.objects.create(
+            ingredient=self.paneer, location=self.location,
+            batch_number='EARLY-EXP',
+            received_quantity=Decimal('5'),
+            remaining_quantity=Decimal('5'),
+            unit_cost=Decimal('300'),
+            expiry_date=_date.today() + _td(days=2),
+        )
+        # Bump up the materialised level so the deduction can proceed.
+        sl = StockLevel.objects.get(ingredient=self.paneer, location=self.location)
+        sl.quantity = Decimal('10')
+        sl.save(update_fields=['quantity'])
+
+        stock_service.deduct_stock(
+            ingredient_id=self.paneer.id,
+            location_id=self.location.id,
+            quantity=Decimal('5'),
+            movement_type=MovementType.ORDER_DEDUCTION,
+        )
+        late_expiry.refresh_from_db()
+        early_expiry.refresh_from_db()
+        # FEFO: early_expiry was consumed, late_expiry untouched.
+        self.assertEqual(early_expiry.remaining_quantity, Decimal('0'))
+        self.assertEqual(late_expiry.remaining_quantity, Decimal('5'))
+
+    # ----- audit-11: signal idempotency ------------------------------------
+
+    def test_no_double_deduct_on_reconfirm(self):
+        """If an Order goes Pending → Confirmed → Pending → Confirmed, the
+        signal must NOT deduct twice. Idempotency guarded by an existing
+        StockMovement row for (reference_type='order', reference_id=order.id).
+        """
+        from orders.models import Order, OrderItem
+        from menu.models import Kitchen, MenuCategory, MenuItem, Variant
+
+        kitchen = Kitchen.objects.create(
+            location=self.location, name='K', code='K',
+        )
+        cat = MenuCategory.objects.create(
+            location=self.location, name='C', kitchen=kitchen,
+        )
+        item = MenuItem.objects.create(category=cat, name='Dish-X')
+        variant = Variant.objects.create(
+            menu_item=item, name='Reg', price=Decimal('100'),
+        )
+        recipe = Recipe.objects.create(menu_item=item)
+        RecipeIngredient.objects.create(
+            recipe=recipe, ingredient=self.onion,
+            quantity=Decimal('0.5'), unit=self.unit_kg,
+        )
+        stock_service.record_opening_stock(
+            ingredient_id=self.onion.id,
+            location_id=self.location.id,
+            quantity=Decimal('10'),
+            unit_cost=Decimal('40'),
+        )
+
+        order = Order.objects.create(
+            location=self.location,
+            source=Order.OrderSource.STAFF_POS,
+            status=Order.Status.PENDING,
+            total=Decimal('100'),
+        )
+        OrderItem.objects.create(
+            order=order, menu_item=item, variant=variant,
+            quantity=1, unit_price=Decimal('100'),
+        )
+        # First confirm — deducts 0.5 kg.
+        order.status = Order.Status.CONFIRMED
+        order.save()
+        # Toggle back and forward.
+        order.status = Order.Status.PENDING
+        order.save()
+        order.status = Order.Status.CONFIRMED
+        order.save()
+
+        sl = StockLevel.objects.get(ingredient=self.onion, location=self.location)
+        # Without the idempotency guard, stock would be 9.0 (deducted twice).
+        self.assertEqual(sl.quantity, Decimal('9.5'))
+
+    # ----- audit-13: opening stock + FIFO interaction ----------------------
+
+    def test_opening_stock_then_deduction_no_crash(self):
+        """Opening stock creates NO batch; subsequent deduction must succeed
+        (StockLevel drops; FIFO is a no-op since no batches exist)."""
+        stock_service.record_opening_stock(
+            ingredient_id=self.tomato.id,
+            location_id=self.location.id,
+            quantity=Decimal('20'),
+            unit_cost=Decimal('30'),
+        )
+        # Should NOT raise.
+        stock_service.deduct_stock(
+            ingredient_id=self.tomato.id,
+            location_id=self.location.id,
+            quantity=Decimal('5'),
+            movement_type=MovementType.ORDER_DEDUCTION,
+        )
+        sl = StockLevel.objects.get(ingredient=self.tomato, location=self.location)
+        self.assertEqual(sl.quantity, Decimal('15'))
+
+    # ----- audit-14: divide-by-zero in weighted average --------------------
+
+    def test_replenish_with_zero_existing_stock(self):
+        """Replenishing into a fresh stock level must not divide by zero."""
+        stock_service.record_opening_stock(
+            ingredient_id=self.paneer.id,
+            location_id=self.location.id,
+            quantity=Decimal('0'),
+            unit_cost=Decimal('0'),
+        )
+        sl, _m = stock_service.replenish_stock(
+            ingredient_id=self.paneer.id,
+            location_id=self.location.id,
+            quantity=Decimal('5'),
+            unit_cost=Decimal('300'),
+            movement_type=MovementType.PURCHASE_RECEIPT,
+        )
+        self.assertEqual(sl.quantity, Decimal('5'))
+        self.assertEqual(sl.unit_cost, Decimal('300'))
+
+    # ----- audit InventoryUnit cycle detection -----------------------------
+
+    def test_inventory_unit_cycle_detected(self):
+        """A → B → A should be rejected by clean()."""
+        a = InventoryUnit.objects.create(
+            name='UnitA', short_name='ua', restaurant=self.restaurant,
+        )
+        b = InventoryUnit.objects.create(
+            name='UnitB', short_name='ub',
+            base_unit=a, conversion_factor=Decimal('10'),
+            restaurant=self.restaurant,
+        )
+        a.base_unit = b
+        with self.assertRaises(ValidationError):
+            a.clean()
+
+    def test_inventory_unit_base_unit_cross_restaurant(self):
+        other = Restaurant.objects.create(name='X-Restaurant')
+        other_base = InventoryUnit.objects.create(
+            name='OtherBase', short_name='ob', restaurant=other,
+        )
+        with self.assertRaises(ValidationError):
+            u = InventoryUnit(
+                name='MyDerived', short_name='myd',
+                base_unit=other_base, conversion_factor=Decimal('5'),
+                restaurant=self.restaurant,
+            )
+            u.full_clean()
+
+    # ----- audit-25: recipe unit incompatible with ingredient unit ---------
+
+    def test_recipe_ingredient_incompatible_unit_rejected_at_save(self):
+        """Adding paneer (kg) to a recipe with unit=ml (volume) must reject."""
+        from menu.models import Kitchen, MenuCategory, MenuItem
+        kitchen = Kitchen.objects.create(
+            location=self.location, name='K2', code='K2',
+        )
+        cat = MenuCategory.objects.create(
+            location=self.location, name='C2', kitchen=kitchen,
+        )
+        item = MenuItem.objects.create(category=cat, name='Dish-Y')
+        recipe = Recipe.objects.create(menu_item=item)
+
+        with self.assertRaises(ValidationError):
+            ri = RecipeIngredient(
+                recipe=recipe,
+                ingredient=self.paneer,   # tracked in kg (mass)
+                quantity=Decimal('50'),
+                unit=self.unit_ml,        # volume — incompatible
+            )
+            ri.full_clean()
+
+    # ----- audit-8: PO received_quantity cannot exceed ordered (DB) --------
+
+    def test_po_received_quantity_cannot_exceed_ordered_quantity(self):
+        from inventory.models import Supplier
+        supplier = Supplier.objects.create(
+            name='SupX', restaurant=self.restaurant,
+        )
+        from datetime import date as _date
+        po = purchase_order_service.create_purchase_order(
+            supplier_id=supplier.id,
+            location_id=self.location.id,
+            order_date=_date.today(),
+            items_data=[
+                {'ingredient_id': self.onion.id, 'ordered_quantity': Decimal('10'), 'unit_price': Decimal('40')},
+            ],
+        )
+        purchase_order_service.submit_purchase_order(po.id)
+        po_item = po.items.first()
+
+        # Try to over-receive at the service layer.
+        with self.assertRaises(ValueError):
+            purchase_order_service.receive_po_item(
+                po_item_id=po_item.id,
+                received_quantity=Decimal('11'),  # > ordered
+            )
+
+    # ----- audit-8: Supplier rating bounded by 5 ---------------------------
+
+    def test_supplier_rating_must_be_le_5(self):
+        from inventory.models import Supplier
+        with self.assertRaises(ValidationError):
+            s = Supplier(
+                name='OutOfRangeSupplier',
+                restaurant=self.restaurant,
+                rating=Decimal('6.00'),
+            )
+            s.full_clean()
+
+    # ----- audit-20: preferred_price overwritten on receive ----------------
+
+    @unittest.expectedFailure
+    def test_preferred_price_not_overwritten_on_one_off(self):
+        """Demonstrates audit-20: a one-off PO at an outlier price silently
+        overrides the negotiated SupplierIngredient.preferred_price.
+        Marked expectedFailure until SupplierIngredient is split from
+        price-history tracking."""
+        from inventory.models import Supplier, SupplierIngredient
+        from datetime import date as _date
+        supplier = Supplier.objects.create(
+            name='SupY', restaurant=self.restaurant,
+        )
+        SupplierIngredient.objects.create(
+            supplier=supplier, ingredient=self.onion,
+            preferred_price=Decimal('40'),
+            is_preferred=True,
+        )
+        po = purchase_order_service.create_purchase_order(
+            supplier_id=supplier.id,
+            location_id=self.location.id,
+            order_date=_date.today(),
+            items_data=[
+                {'ingredient_id': self.onion.id, 'ordered_quantity': Decimal('1'), 'unit_price': Decimal('40')},
+            ],
+        )
+        purchase_order_service.submit_purchase_order(po.id)
+        purchase_order_service.receive_po_item(
+            po_item_id=po.items.first().id,
+            received_quantity=Decimal('1'),
+            received_unit_price=Decimal('200'),  # outlier
+        )
+        si = SupplierIngredient.objects.get(supplier=supplier, ingredient=self.onion)
+        self.assertEqual(si.preferred_price, Decimal('40'))  # FAILS today (it's 200).
+
+    # ----- audit-9: concurrent PO number generation ------------------------
+
+    @unittest.skip('audit-9: race needs threading — manual review')
+    def test_concurrent_po_number_generation(self):
+        """Marker test — see AUDIT.md audit-9. Concurrent creates currently
+        produce duplicate PO numbers → UniqueConstraint violation."""
+
+    # ----- audit-5: API auth ----------------------------------------------
+
+    @unittest.expectedFailure
+    def test_unauthenticated_api_rejected(self):
+        """All inventory endpoints currently accept anonymous requests.
+        After permission_classes are added per-view, this should pass."""
+        from django.test import Client
+        c = Client()
+        resp = c.get('/api/v1/inventory/ingredients/')
+        # Expected once auth is enforced.
+        self.assertIn(resp.status_code, (401, 403))

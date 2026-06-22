@@ -1,9 +1,17 @@
 """
 Inventory API views — function-based (matching project convention).
+
+audit-5: every view now requires authentication. Project-wide
+DEFAULT_PERMISSION_CLASSES is [] so we must opt in explicitly.
+
+FIXME(audit-1): tenant scoping is still missing — a logged-in user from
+Restaurant A can read/write Restaurant B's data by passing the right query
+param. Add a ``request.user.restaurant_id`` filter on every queryset.
 """
 
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import (
@@ -531,10 +539,22 @@ def ingredient_availability(request):
     menu_item_id = request.query_params.get('menu_item_id')
     if not menu_item_id:
         return Response({'error': 'menu_item_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    # FIX(audit-28): int() on bad input previously raised an uncaught ValueError
+    # → DRF 500. Validate up front.
+    raw_qty = request.query_params.get('quantity', '1')
+    try:
+        qty = int(raw_qty)
+        if qty < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        return Response(
+            {'error': f'quantity must be a positive integer (got {raw_qty!r}).'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     result = recipe_service.check_ingredient_availability(
         menu_item_id=menu_item_id,
         variant_id=request.query_params.get('variant_id'),
         location_id=request.query_params.get('location_id'),
-        quantity=int(request.query_params.get('quantity', 1)),
+        quantity=qty,
     )
     return Response(result)

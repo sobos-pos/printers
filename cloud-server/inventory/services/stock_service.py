@@ -3,11 +3,15 @@ Stock-level operations: adjustments, deductions, replenishments, queries.
 
 Every function that mutates stock acquires a ``select_for_update()`` lock on
 the StockLevel row and records a StockMovement for auditability.
+
+See ``inventory/AUDIT.md`` for outstanding production-readiness items.
 """
 
+import logging
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from inventory.models import (
@@ -19,17 +23,24 @@ from inventory.models import (
     StockMovement,
 )
 
+logger = logging.getLogger('inventory')
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def get_or_create_stock_level(ingredient_id, location_id):
-    """Return the StockLevel for (ingredient, location), creating if needed."""
-    stock, _created = StockLevel.objects.get_or_create(
-        ingredient_id=ingredient_id,
-        location_id=location_id,
-    )
+    """Return the StockLevel for (ingredient, location), creating if needed.
+
+    Wrapped in ``transaction.atomic`` to avoid the race documented in
+    AUDIT.md audit-29 where two concurrent callers create the same row.
+    """
+    with transaction.atomic():
+        stock, _created = StockLevel.objects.get_or_create(
+            ingredient_id=ingredient_id,
+            location_id=location_id,
+        )
     return stock
 
 
@@ -48,7 +59,17 @@ def _recalculate_cost(stock, received_qty, received_unit_price):
 
 
 def _deduct_fifo_batches(ingredient_id, location_id, quantity):
-    """Deduct from the oldest active batches (FIFO). Returns remaining qty."""
+    """Deduct from the oldest active batches (FIFO). Returns remaining qty.
+
+    FIXME(audit-18): For perishables, ordering should be FEFO — by
+    ``expiry_date`` (NULLS LAST) then ``created_at``. Switch when an
+    ``ingredient.perishable`` flag is added.
+
+    FIXME(audit-4): When batches sum < requested quantity, we currently return
+    the leftover silently. The caller (deduct_stock) does NOT check the return
+    value, so StockLevel and Batch totals can drift out of sync. We now log a
+    WARNING — callers should track this in a dead-letter queue.
+    """
     batches = (
         Batch.objects
         .filter(
@@ -58,7 +79,8 @@ def _deduct_fifo_batches(ingredient_id, location_id, quantity):
             remaining_quantity__gt=Decimal('0'),
         )
         .select_for_update()
-        .order_by('created_at')
+        # FEFO-leaning: expiry first when available, then created order.
+        .order_by(F('expiry_date').asc(nulls_last=True), 'created_at')
     )
     remaining = quantity
     for batch in batches:
@@ -70,6 +92,14 @@ def _deduct_fifo_batches(ingredient_id, location_id, quantity):
             batch.status = BatchStatus.CONSUMED
         batch.save(update_fields=['remaining_quantity', 'status', 'updated_at'])
         remaining -= deduct
+
+    if remaining > Decimal('0'):
+        logger.warning(
+            'FIFO drift detected: ingredient=%s location=%s could not satisfy '
+            'deduction of %s (%s left untracked at batch level). StockLevel was '
+            'still decremented; batch totals will diverge from StockLevel.',
+            ingredient_id, location_id, quantity, remaining,
+        )
     return remaining
 
 
@@ -166,12 +196,17 @@ def deduct_stock(
     reference_id=None,
     notes='',
     performed_by=None,
+    skip_batch_fifo=False,
 ):
     """Deduct stock (internal helper). Validates sufficient stock.
 
     Also deducts from FIFO batches if any exist.
     ``quantity`` should be a positive Decimal — it will be stored as negative
     in StockMovement.
+
+    ``skip_batch_fifo``: pass True when the caller has already decremented a
+    specific batch (e.g. ``wastage_service.log_wastage(batch_id=...)``) — see
+    AUDIT.md audit-2.
     """
     if quantity <= Decimal('0'):
         raise ValueError('Deduction quantity must be positive.')
@@ -191,8 +226,10 @@ def deduct_stock(
         stock.quantity -= quantity
         stock.save(update_fields=['quantity', 'updated_at'])
 
-        # FIFO batch deduction (best-effort — batches may not exist)
-        _deduct_fifo_batches(ingredient_id, location_id, quantity)
+        # FIFO batch deduction (best-effort — batches may not exist).
+        # Skipped when caller has already chosen a specific batch.
+        if not skip_batch_fifo:
+            _deduct_fifo_batches(ingredient_id, location_id, quantity)
 
         movement = StockMovement.objects.create(
             ingredient_id=ingredient_id,
@@ -278,7 +315,7 @@ def get_low_stock_items(location_id):
         .filter(
             location_id=location_id,
             low_stock_threshold__isnull=False,
-            quantity__lte=models_F('low_stock_threshold'),
+            quantity__lte=F('low_stock_threshold'),
         )
         .select_related('ingredient', 'ingredient__unit', 'ingredient__category')
         .order_by('quantity')
@@ -310,5 +347,5 @@ def get_stock_movements(
     return qs.order_by('-created_at')
 
 
-# Needed for the F() expression in get_low_stock_items
-from django.db.models import F as models_F  # noqa: E402
+# audit-22: F was previously imported at the bottom of the file and aliased to
+# ``models_F``. Moved to top of file as a normal import.

@@ -15,12 +15,20 @@ Design invariants:
 - StockLevel.quantity is the materialised balance; it can always be
   reconstructed by summing StockMovement.quantity for (ingredient, location).
 - Batch consumption follows FIFO (oldest batch first).
+
+------------------------------------------------------------------------------
+PRODUCTION READINESS AUDIT — see AUDIT.md in this folder for the full report.
+Inline ``# FIXME(audit-N)`` tags below correspond to numbered findings there.
+Critical open items: audit-1 (tenant boundary), audit-6 (InventoryUnit on_delete),
+audit-9 (number-generator races), audit-11 (signal idempotency), audit-17 (no
+expiry job), audit-18 (FIFO vs FEFO). These are NOT fully fixed in code yet.
+------------------------------------------------------------------------------
 """
 
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from core.models import BaseModel
@@ -100,6 +108,9 @@ class InventoryUnit(BaseModel):
 
     name = models.CharField(max_length=60, help_text='Full name, e.g. "Kilogram"')
     short_name = models.CharField(max_length=10, help_text='Abbreviation, e.g. "kg"')
+    # FIXME(audit-6): on_delete=SET_NULL silently corrupts every derived unit's
+    # conversion factor when the base is deleted. Change to PROTECT in a new
+    # migration AFTER auditing existing data for orphaned references.
     base_unit = models.ForeignKey(
         'self',
         null=True,
@@ -133,6 +144,26 @@ class InventoryUnit(BaseModel):
     def clean(self):
         if self.base_unit_id and self.base_unit_id == self.id:
             raise ValidationError('A unit cannot be its own base unit.')
+        # Cycle detection: walking up the base_unit chain must terminate.
+        seen = {self.id} if self.id else set()
+        cursor = self.base_unit
+        while cursor is not None:
+            if cursor.id in seen:
+                raise ValidationError(
+                    'InventoryUnit chain forms a cycle through '
+                    f'{cursor.short_name}.'
+                )
+            seen.add(cursor.id)
+            cursor = cursor.base_unit
+        # Tenant boundary: base_unit must belong to same restaurant.
+        if (
+            self.base_unit_id
+            and self.restaurant_id
+            and self.base_unit.restaurant_id != self.restaurant_id
+        ):
+            raise ValidationError(
+                'base_unit must belong to the same restaurant.'
+            )
 
     def __str__(self):
         return f'{self.short_name} ({self.name})'
@@ -200,6 +231,29 @@ class Ingredient(BaseModel):
             ),
         ]
         ordering = ['name']
+        # FIXME(audit-27): Add Index(fields=['restaurant', 'is_active']) for the
+        # primary list query. Requires a new migration.
+
+    def clean(self):
+        # FIXME(audit-1): Tenant boundary — unit and category must belong to the
+        # same restaurant. Enforced at app level here; DB-level enforcement
+        # requires a check constraint that joins, which Django can't express.
+        if (
+            self.unit_id
+            and self.restaurant_id
+            and self.unit.restaurant_id != self.restaurant_id
+        ):
+            raise ValidationError(
+                'Ingredient.unit must belong to the same restaurant.'
+            )
+        if (
+            self.category_id
+            and self.restaurant_id
+            and self.category.restaurant_id != self.restaurant_id
+        ):
+            raise ValidationError(
+                'Ingredient.category must belong to the same restaurant.'
+            )
 
     def __str__(self):
         return f'{self.name} ({self.unit.short_name})'
@@ -290,6 +344,19 @@ class StockLevel(BaseModel):
                 name='idx_stocklevel_location_qty',
             ),
         ]
+
+    def clean(self):
+        # FIXME(audit-1): tenant boundary — ingredient and location must belong
+        # to the same restaurant.
+        if (
+            self.ingredient_id
+            and self.location_id
+            and self.ingredient.restaurant_id != self.location.restaurant_id
+        ):
+            raise ValidationError(
+                'StockLevel.ingredient and StockLevel.location must belong to '
+                'the same restaurant.'
+            )
 
     @property
     def is_low_stock(self):
@@ -444,6 +511,10 @@ class Supplier(BaseModel):
         blank=True,
         validators=[
             MinValueValidator(Decimal('0')),
+            # FIXME(audit-8): MaxValueValidator(5) was missing — DB check_constraint
+            # below catches it at write, but app-level validators never raised
+            # for bad input. Requires ``makemigrations inventory`` to record.
+            MaxValueValidator(Decimal('5')),
         ],
         help_text='0.00 – 5.00',
     )
@@ -578,6 +649,26 @@ class PurchaseOrder(BaseModel):
     def clean(self):
         if self.total_amount < Decimal('0'):
             raise ValidationError('Total amount cannot be negative.')
+        # FIXME(audit-1): supplier must belong to the same restaurant as
+        # location.restaurant.
+        if (
+            self.supplier_id
+            and self.location_id
+            and self.supplier.restaurant_id != self.location.restaurant_id
+        ):
+            raise ValidationError(
+                'PurchaseOrder.supplier and PurchaseOrder.location must belong '
+                'to the same restaurant.'
+            )
+        # FIXME(audit-8): expected_delivery_date must not precede order_date.
+        if (
+            self.expected_delivery_date
+            and self.order_date
+            and self.expected_delivery_date < self.order_date
+        ):
+            raise ValidationError(
+                'expected_delivery_date cannot be before order_date.'
+            )
 
     def __str__(self):
         return f'{self.po_number} [{self.get_status_display()}] — {self.supplier.name}'
@@ -629,6 +720,15 @@ class PurchaseOrderItem(BaseModel):
             models.CheckConstraint(
                 condition=models.Q(received_quantity__gte=Decimal('0')),
                 name='poitem_received_qty_non_negative',
+            ),
+            # FIXME(audit-8): Add a DB-level CheckConstraint
+            #   received_quantity <= ordered_quantity
+            # Django 5 supports column-vs-column via F expression in CheckConstraint,
+            # but it requires a new migration. Currently enforced only at service
+            # layer (purchase_order_service.receive_po_item).
+            models.CheckConstraint(
+                condition=models.Q(received_quantity__lte=models.F('ordered_quantity')),
+                name='poitem_received_le_ordered',
             ),
         ]
 
@@ -735,8 +835,17 @@ class Batch(BaseModel):
                 condition=models.Q(remaining_quantity__gte=Decimal('0')),
                 name='batch_remaining_non_negative',
             ),
+            # FIXME(audit-8): Promote ``clean()``'s remaining<=received check to
+            # a DB-level constraint. Run ``makemigrations inventory``.
+            models.CheckConstraint(
+                condition=models.Q(remaining_quantity__lte=models.F('received_quantity')),
+                name='batch_remaining_le_received',
+            ),
         ]
         ordering = ['created_at']  # FIFO — oldest first
+        # FIXME(audit-18): For perishables we want FEFO (first expire first out),
+        # not FIFO. Service layer should order by ``expiry_date NULLS LAST, created_at``
+        # before consuming. See stock_service._deduct_fifo_batches.
         indexes = [
             models.Index(
                 fields=['location', 'ingredient', 'status'],
@@ -758,6 +867,23 @@ class Batch(BaseModel):
             raise ValidationError('Expiry date must be after manufacture date.')
         if self.remaining_quantity > self.received_quantity:
             raise ValidationError('Remaining quantity cannot exceed received quantity.')
+        # FIXME(audit-1): tenant boundary checks.
+        if (
+            self.ingredient_id
+            and self.location_id
+            and self.ingredient.restaurant_id != self.location.restaurant_id
+        ):
+            raise ValidationError(
+                'Batch.ingredient and Batch.location must belong to the same restaurant.'
+            )
+        if (
+            self.supplier_id
+            and self.location_id
+            and self.supplier.restaurant_id != self.location.restaurant_id
+        ):
+            raise ValidationError(
+                'Batch.supplier and Batch.location must belong to the same restaurant.'
+            )
 
     def __str__(self):
         return f'Batch {self.batch_number}: {self.ingredient.name} ({self.remaining_quantity} left)'
@@ -896,6 +1022,16 @@ class StockTransfer(BaseModel):
         if self.from_location_id and self.to_location_id:
             if self.from_location_id == self.to_location_id:
                 raise ValidationError('Cannot transfer stock to the same location.')
+            # FIXME(audit-1): tenant boundary — both locations must belong to
+            # the same restaurant. Without this, two tenants on the same DB
+            # can transfer stock to each other.
+            if (
+                self.from_location.restaurant_id
+                != self.to_location.restaurant_id
+            ):
+                raise ValidationError(
+                    'Cannot transfer stock between different restaurants.'
+                )
 
     def __str__(self):
         return f'{self.transfer_number} [{self.get_status_display()}]'
@@ -969,6 +1105,9 @@ class Recipe(BaseModel):
         blank=True,
         help_text='Optional label (auto-set from menu item if blank)',
     )
+    # FIXME(audit-23): added is_active so a recipe can be deactivated (e.g. for
+    # seasonal items) without deleting it. Run ``makemigrations inventory``.
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         constraints = [
@@ -1028,6 +1167,38 @@ class RecipeIngredient(BaseModel):
                 name='recipe_ingredient_qty_positive',
             ),
         ]
+
+    def clean(self):
+        # FIXME(audit-25): the recipe ``unit`` must be convertible to the
+        # ingredient's tracking unit. Catching this at save-time rather than
+        # at deduction-time avoids a confusing runtime error during ordering.
+        if self.unit_id and self.ingredient_id:
+            from_base = self.unit.base_unit_id or self.unit_id
+            to_base = self.ingredient.unit.base_unit_id or self.ingredient.unit_id
+            same_chain = (
+                from_base == to_base
+                or self.unit_id == to_base
+                or self.ingredient.unit_id == from_base
+            )
+            if not same_chain:
+                raise ValidationError(
+                    f'Recipe unit {self.unit.short_name} cannot be converted '
+                    f'to ingredient unit {self.ingredient.unit.short_name}.'
+                )
+        # FIXME(audit-1): tenant boundary.
+        if (
+            self.recipe_id
+            and self.ingredient_id
+            and self.recipe.menu_item_id
+        ):
+            menu_restaurant = (
+                self.recipe.menu_item.category.location.restaurant_id
+            )
+            if self.ingredient.restaurant_id != menu_restaurant:
+                raise ValidationError(
+                    'RecipeIngredient.ingredient must belong to the same '
+                    "restaurant as the recipe's menu_item."
+                )
 
     def __str__(self):
         return f'{self.quantity} {self.unit.short_name} {self.ingredient.name}'
