@@ -1,0 +1,116 @@
+flowchart-diagram
+
+// ============================================================
+// End-to-end: how Inventory and Menu connect inside a tenant,
+// from setup through stock building to order deduction.
+// Verified against cloud-server (current code).
+//
+// CONCRETE EXAMPLE woven through the diagram:
+//   Restaurant "Spice Garden" → Location "MG Road"
+//   Raw: Paneer (5 kg), Onion (10 kg), Oil (5 L)
+//   Menu: "Paneer Tikka" (tracks_inventory=True)
+//     Recipe per serving: 200g paneer + 100g onion + 50ml oil
+//   Bulk-prep path: PreparedItem "Chicken Biryani" (10 kg batch)
+//     → MenuItem "Biryani Plate" consumes 0.3 kg prepared per plate
+// ============================================================
+
+meta {
+  title: "Inventory ↔ Menu — Tenant Setup to Order Deduction";
+  direction: down;
+  fontFamily: "Inter";
+  fontSize: 14;
+  fontWeight: 600;
+}
+
+TENANT [label: "TENANT axis — who owns what?", color: slate] {
+  Restaurant [label: "Restaurant (tenant root)\ne.g. Spice Garden", icon: building]
+  Location [label: "Location (branch)\ne.g. MG Road", icon: building]
+  RestaurantScope [label: "Restaurant-scoped master data:\nIngredient, InventoryUnit, Supplier,\nPreparedItem, IngredientCategory", icon: list-alt]
+  LocationScope [label: "Location-scoped balances:\nStockLevel (raw), PreparedStockLevel,\nPurchaseOrder, MenuCategory → MenuItem", icon: home]
+}
+
+Restaurant > Location
+Restaurant > RestaurantScope
+Location > LocationScope
+
+SETUP [label: "SETUP axis — link menu sellables to stock", color: blue] {
+  MenuCatalog [label: "MenuCategory @ Location\n→ MenuItem → Variant / Modifier", icon: file-text]
+  TracksFlag [label: "MenuItem.tracks_inventory = True?\n(default False — opt-in per dish)", shape: diamond, icon: cog]
+  RecipeLink [label: "Recipe (bill of materials)\n• item recipe (all variants)\n• variant recipe (override)\n• modifier recipe (add-on / removal)", icon: list-alt]
+  RecipeLine [label: "RecipeIngredient line\n→ raw Ingredient  OR  PreparedItem\nquantity + unit + effect (add/subtract)", icon: file-text]
+  PreparedBOM [label: "PreparedItemComponent\n(raw BOM for bulk prep)\ne.g. 1 kg biryani = 0.6 kg rice + 0.4 kg chicken", icon: cog]
+}
+
+MenuCatalog > TracksFlag
+TracksFlag > RecipeLink: "yes"
+TracksFlag > NoRecipe [label: "Item sells without\ninventory coupling", shape: document, color: slate]: "no"
+RecipeLink > RecipeLine
+RecipeLine > PreparedBOM: "uses prepared item"
+
+STOCK_IN [label: "STOCK-IN axis — fill the pantry", color: green] {
+  Opening [label: "Opening stock\n(stock_service.record_opening_stock)", icon: plus]
+  POReceive [label: "Purchase Order receive\nDraft → Submitted → receive line\n→ StockLevel ↑ + Batch (optional)", icon: truck]
+  Production [label: "Production run (produce)\nraw StockLevel ↓\n→ PreparedStockLevel ↑ + ProductionBatch", icon: cog]
+  TransferIn [label: "Inter-location transfer receive\n(from another branch)", icon: send]
+  ManualUp [label: "Manual adjustment / physical count", icon: edit]
+}
+
+Opening > RawStock [label: "Raw balance\nStockLevel @ Location\ne.g. Paneer 5 kg @ MG Road", icon: database, color: green]
+POReceive > RawStock
+Production > RawStock: "consumes raw"
+Production > PrepStock [label: "Prepared balance\nPreparedStockLevel @ Location\ne.g. Biryani 10 kg @ MG Road", icon: database, color: orange]
+TransferIn > RawStock
+ManualUp > RawStock
+
+ORDER [label: "ORDER axis — guest buys a dish", color: violet] {
+  PlaceOrder [label: "POST /api/v1/orders/\nOrderService.create_order()\nstatus = Pending", shape: oval, icon: clipboard]
+  NoDeductYet [label: "No stock movement yet\n(items priced from Variant + Modifier)", icon: clock]
+  Availability [label: "Optional pre-check (API exists)\nGET /inventory/recipes/availability/\ncheck_ingredient_availability()\nNOT wired in user_app yet", shape: hexagon, icon: search, color: slate]
+  NodeConfirm [label: "Node confirms order\nSyncService.apply_status_push()\nPending → Confirmed", icon: check]
+  Signal [label: "post_save signal\ninventory.signals.sync_inventory_on_status_change", icon: cog]
+}
+
+PlaceOrder > NoDeductYet
+NoDeductYet > Availability: "optional"
+Availability > NodeConfirm
+NoDeductYet > NodeConfirm: "skip check"
+NodeConfirm > Signal
+
+DEDUCT [label: "DEDUCTION axis — Confirmed triggers stock-out", color: orange] {
+  Gate [label: "For each OrderItem:\ntracks_inventory == True?", shape: diamond, icon: cog]
+  Resolve [label: "Merge recipes:\nvariant recipe ?? item recipe\n+ each modifier recipe\nADD/SUBTRACT → net qty × order qty", icon: list-alt]
+  PreCheck [label: "All raw + prepared lines\nhave enough stock?", shape: diamond, icon: cog]
+  DeductRaw [label: "stock_service.deduct_stock()\nmovement_type = order_deduction\nreference_type = order", icon: minus]
+  DeductPrep [label: "production_service.deduct_prepared_stock()\nFIFO over ProductionBatch", icon: minus]
+  Insufficient [label: "InsufficientStockError\n→ logged as WARNING\norder STILL confirmed\n(nothing deducted)", shape: document, color: red]
+  Ledger [label: "Append-only ledgers:\nStockMovement + PreparedStockMovement\n(idempotent — never double-deduct)", icon: file-text]
+}
+
+Signal > Gate
+Gate > Resolve: "yes"
+Gate > SkipItem [label: "Skip line\n(no recipe needed)", shape: document, color: slate]: "no"
+Resolve > PreCheck
+PreCheck > DeductRaw: "all OK"
+PreCheck > DeductPrep: "all OK"
+PreCheck > Insufficient: "short"
+DeductRaw > Ledger
+DeductPrep > Ledger
+
+EXAMPLE [label: "EXAMPLE — 2× Paneer Tikka Full @ MG Road", color: blue] {
+  ExBefore [label: "Before: Paneer 5.0 kg, Onion 10.0 kg, Oil 5.0 L", icon: database]
+  ExAfter [label: "After confirm: Paneer 4.6 kg (−0.4)\nOnion 9.8 kg (−0.2), Oil 4.9 L (−0.1 L)", icon: database]
+  ExMove [label: "3 StockMovement rows\nreference_id = order UUID", icon: file-text]
+}
+
+Ledger > ExBefore
+ExBefore > ExAfter
+ExAfter > ExMove
+
+CANCEL [label: "CANCEL path — reverse on Cancelled", color: red] {
+  CancelStatus [label: "status → Cancelled", icon: x]
+  Reverse [label: "reverse_ingredients_for_order()\nreplenish raw + prepared\nmovement_type = order_reversal", icon: plus]
+}
+
+ExMove > CancelStatus: "if cancelled"
+CancelStatus > Reverse
+Reverse > RawStock

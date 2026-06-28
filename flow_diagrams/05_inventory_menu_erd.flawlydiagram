@@ -1,0 +1,217 @@
+entity-relationship-diagram
+
+// ============================================================
+// How Inventory entities connect to Menu sellables.
+// Connector ">" = many-to-one (FK side -> PK side).
+// Two scoping levels inside a tenant:
+//   RESTAURANT scope — master catalogue (Ingredient, PreparedItem, Supplier…)
+//   LOCATION scope   — on-hand balances + menu + orders
+// Bridge table: Recipe → RecipeIngredient → Ingredient | PreparedItem
+// ============================================================
+
+meta {
+  title: "Inventory ↔ Menu — Data Model (Tenant + Recipe Bridge)";
+  direction: right;
+  fontFamily: "Inter";
+  fontSize: 14;
+}
+
+Restaurant [icon: building, color: slate] {
+  id uuid pk
+  name string
+}
+
+Location [icon: building, color: slate] {
+  id uuid pk
+  restaurant_id uuid fk
+  name string
+}
+
+InventoryUnit [icon: cog] {
+  id uuid pk
+  restaurant_id uuid fk
+  short_name string
+  base_unit_id uuid fk
+  conversion_factor decimal
+}
+
+Ingredient [icon: list-alt, color: green] {
+  id uuid pk
+  restaurant_id uuid fk
+  unit_id uuid fk
+  name string
+  is_active boolean
+}
+
+StockLevel [icon: database, color: green] {
+  id uuid pk
+  ingredient_id uuid fk
+  location_id uuid fk
+  quantity decimal
+  unit_cost decimal
+  low_stock_threshold decimal
+}
+
+StockMovement [icon: file-text, color: green] {
+  id uuid pk
+  ingredient_id uuid fk
+  location_id uuid fk
+  movement_type string
+  quantity decimal
+  reference_type string
+  reference_id uuid
+}
+
+PreparedItem [icon: cog, color: orange] {
+  id uuid pk
+  restaurant_id uuid fk
+  unit_id uuid fk
+  name string
+  shelf_life_hours int
+}
+
+PreparedItemComponent [icon: list-alt, color: orange] {
+  id uuid pk
+  prepared_item_id uuid fk
+  ingredient_id uuid fk
+  quantity decimal
+  unit_id uuid fk
+}
+
+PreparedStockLevel [icon: database, color: orange] {
+  id uuid pk
+  prepared_item_id uuid fk
+  location_id uuid fk
+  quantity decimal
+  unit_cost decimal
+}
+
+ProductionBatch [icon: file-text, color: orange] {
+  id uuid pk
+  prepared_item_id uuid fk
+  location_id uuid fk
+  produced_quantity decimal
+  remaining_quantity decimal
+  expiry_at datetime
+}
+
+MenuCategory [icon: list-alt, color: blue] {
+  id uuid pk
+  location_id uuid fk
+  kitchen_id uuid fk
+  name string
+}
+
+MenuItem [icon: file-text, color: blue] {
+  id uuid pk
+  category_id uuid fk
+  name string
+  tracks_inventory boolean
+  is_available boolean
+}
+
+Variant [icon: dollar-sign, color: blue] {
+  id uuid pk
+  menu_item_id uuid fk
+  name string
+  price decimal
+}
+
+Modifier [icon: edit, color: blue] {
+  id uuid pk
+  group_id uuid fk
+  name string
+  price decimal
+}
+
+Recipe [icon: link, color: violet] {
+  id uuid pk
+  menu_item_id uuid fk
+  variant_id uuid fk
+  modifier_id uuid fk
+  name string
+}
+
+RecipeIngredient [icon: link, color: violet] {
+  id uuid pk
+  recipe_id uuid fk
+  ingredient_id uuid fk
+  prepared_item_id uuid fk
+  quantity decimal
+  unit_id uuid fk
+  effect string
+}
+
+Order [icon: clipboard, color: violet] {
+  id uuid pk
+  location_id uuid fk
+  table_id uuid fk
+  status string
+  total decimal
+}
+
+OrderItem [icon: file-text, color: violet] {
+  id uuid pk
+  order_id uuid fk
+  menu_item_id uuid fk
+  variant_id uuid fk
+  quantity int
+}
+
+OrderItemModifier [icon: edit, color: violet] {
+  id uuid pk
+  order_item_id uuid fk
+  modifier_id uuid fk
+}
+
+PurchaseOrder [icon: truck, color: green] {
+  id uuid pk
+  location_id uuid fk
+  supplier_id uuid fk
+  status string
+}
+
+// --- tenant scoping ---
+Location.restaurant_id > Restaurant.id
+InventoryUnit.restaurant_id > Restaurant.id
+Ingredient.restaurant_id > Restaurant.id
+PreparedItem.restaurant_id > Restaurant.id
+
+// --- raw stock @ location ---
+StockLevel.ingredient_id > Ingredient.id
+StockLevel.location_id > Location.id
+StockMovement.ingredient_id > Ingredient.id
+StockMovement.location_id > Location.id
+
+// --- prepared stock @ location ---
+PreparedItemComponent.prepared_item_id > PreparedItem.id
+PreparedItemComponent.ingredient_id > Ingredient.id
+PreparedStockLevel.prepared_item_id > PreparedItem.id
+PreparedStockLevel.location_id > Location.id
+ProductionBatch.prepared_item_id > PreparedItem.id
+ProductionBatch.location_id > Location.id
+
+// --- menu @ location ---
+MenuCategory.location_id > Location.id
+MenuItem.category_id > MenuCategory.id
+Variant.menu_item_id > MenuItem.id
+
+// --- recipe bridge (menu sellable → stock target) ---
+Recipe.menu_item_id > MenuItem.id
+Recipe.variant_id > Variant.id
+Recipe.modifier_id > Modifier.id
+RecipeIngredient.recipe_id > Recipe.id
+RecipeIngredient.ingredient_id > Ingredient.id
+RecipeIngredient.prepared_item_id > PreparedItem.id
+RecipeIngredient.unit_id > InventoryUnit.id
+
+// --- order consumes menu ---
+Order.location_id > Location.id
+OrderItem.order_id > Order.id
+OrderItem.menu_item_id > MenuItem.id
+OrderItem.variant_id > Variant.id
+OrderItemModifier.order_item_id > OrderItem.id
+OrderItemModifier.modifier_id > Modifier.id
+
+// --- procurement feeds raw stock ---
+PurchaseOrder.location_id > Location.id

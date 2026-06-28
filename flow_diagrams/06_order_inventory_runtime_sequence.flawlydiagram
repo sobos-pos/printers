@@ -1,0 +1,104 @@
+sequence-diagram
+
+// ============================================================
+// Runtime timeline: order placement → confirmation → inventory
+// deduction (and optional cancel reversal).
+// Verified against cloud-server orders + inventory apps.
+//
+// Example: Waiter orders 2× Paneer Tikka (Full) @ Table 5.
+// Recipe: 200g paneer + 100g onion + 50ml oil per serving.
+// ============================================================
+
+meta {
+  title: "Order → Confirm → Inventory Deduction (Runtime)";
+  autoNumber: on;
+  fontFamily: "Inter";
+  fontSize: 14;
+}
+
+Waiter [icon: user, color: blue]
+CloudAPI [icon: cloud, color: slate]
+OrderService [icon: server, color: violet]
+SyncOutbox [icon: send, color: slate]
+Node [icon: server, color: violet]
+InventorySignal [icon: cog, color: orange]
+RecipeService [icon: cog, color: orange]
+StockService [icon: database, color: green]
+PrepService [icon: database, color: orange]
+
+Waiter > CloudAPI: "POST /api/v1/orders/ (table, items)"
+activate CloudAPI
+CloudAPI > OrderService: "create_order() — status Pending"
+activate OrderService
+OrderService > OrderService: "resolve MenuItem, Variant, Modifier prices"
+OrderService > OrderService: "create Order + OrderItems (no stock check)"
+OrderService > SyncOutbox: "enqueue ORDER_CREATED payload"
+OrderService --> CloudAPI: "Order (Pending)"
+deactivate OrderService
+CloudAPI --> Waiter: "201 Created"
+deactivate CloudAPI
+
+Note over Waiter, CloudAPI: "Optional: GET /inventory/recipes/availability/?menu_item_id=…\n→ check_ingredient_availability() — API exists, not called by user_app"
+
+Node > CloudAPI: "SyncService.apply_status_push(order, Confirmed)"
+activate CloudAPI
+CloudAPI > CloudAPI: "OrderStateMachine.apply(Pending → Confirmed)"
+CloudAPI > InventorySignal: "post_save on Order (status changed)"
+activate InventorySignal
+InventorySignal > RecipeService: "deduct_ingredients_for_order(order_id, location_id)"
+activate RecipeService
+
+RecipeService > RecipeService: "idempotency: StockMovement ref=order exists?"
+alt [label: "already deducted"] {
+  RecipeService --> InventorySignal: "no-op (skip)"
+}
+else [label: "first confirmation"] {
+  loop [label: "each OrderItem where tracks_inventory=True"] {
+    RecipeService > RecipeService: "_resolve_net_ingredients(item, variant, modifiers)"
+    RecipeService > RecipeService: "accumulate raw + prepared totals × qty"
+  }
+  RecipeService > RecipeService: "pre-check all shortages"
+  alt [label: "insufficient stock"] {
+    RecipeService --> InventorySignal: "raise InsufficientStockError"
+    InventorySignal > InventorySignal: "log WARNING — order stays Confirmed"
+  }
+  else [label: "stock OK (Paneer Tikka example)"] {
+    loop [label: "each raw ingredient total"] {
+      RecipeService > StockService: "deduct_stock(ORDER_DEDUCTION, ref=order)"
+      activate StockService
+      StockService > StockService: "StockLevel ↓, FIFO Batch ↓, StockMovement +"
+      StockService --> RecipeService: "movement"
+      deactivate StockService
+    }
+    loop [label: "each prepared item total (Biryani Plate path)"] {
+      RecipeService > PrepService: "deduct_prepared_stock(FIFO ProductionBatch)"
+      activate PrepService
+      PrepService --> RecipeService: "PreparedStockMovement +"
+      deactivate PrepService
+    }
+    RecipeService --> InventorySignal: "done"
+  }
+}
+deactivate RecipeService
+deactivate InventorySignal
+CloudAPI > SyncOutbox: "enqueue STATUS_CHANGED"
+CloudAPI --> Node: "updated order"
+deactivate CloudAPI
+
+Note over Node, StockService: "Result for 2× Paneer Tikka:\nPaneer 5.0→4.6 kg, Onion 10.0→9.8 kg, Oil 5.0→4.9 L"
+
+alt [label: "order later Cancelled"] {
+  Node > CloudAPI: "apply_status_push(Cancelled)"
+  activate CloudAPI
+  CloudAPI > InventorySignal: "post_save → reverse"
+  activate InventorySignal
+  InventorySignal > RecipeService: "reverse_ingredients_for_order()"
+  activate RecipeService
+  RecipeService > StockService: "replenish_stock(ORDER_REVERSAL, restore_batches)"
+  RecipeService > PrepService: "reverse_prepared_for_order()"
+  RecipeService --> InventorySignal: "stock restored"
+  deactivate RecipeService
+  deactivate InventorySignal
+  CloudAPI --> Node: "order Cancelled"
+  deactivate CloudAPI
+}
